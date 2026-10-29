@@ -55,7 +55,7 @@ const Training = {
     this.example = null;
     if (App.training) for (const [k, w] of DevWin.wins) if (k.startsWith('t|')) w.win.close();
     const topo = taskBuild(task);
-    App.training = { task, topo, result: null };
+    App.training = { task, topo: stpLive(topo), result: null };
     App.undoStacks.training = []; App.redoStacks.training = [];
     App.vp.training = { x: 0, y: 0, z: 1 };
     this.hints = 0;

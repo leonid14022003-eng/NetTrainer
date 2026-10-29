@@ -57,10 +57,12 @@ const DemoUI = {
       DevWin.closeAll();
       restoreTopoInPlace(App.sandbox, this.saved || JSON.stringify(newTopology()));
       _rtMap.delete(App.sandbox);
+      stpLive(App.sandbox);
       Terminal.states.delete(App.sandbox);
       App.changed();
     }
     this.saved = null;
+    if (keep) stpLive(App.sandbox); // демонстрация шла без таймеров STP — дальше сеть живёт как обычно
     App.setMode('realtime');
     this.render();
     if (!keep) { App.setView('learn'); }

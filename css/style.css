@@ -93,6 +93,9 @@ button:disabled { opacity: .45; cursor: default; }
 .link { stroke: var(--link); stroke-width: 1.6; fill: none; }
 .link.cross { stroke-dasharray: 7 4; }
 .link.console { stroke: #4aa7e0; stroke-width: 2; }
+/* широковещательный шторм: петля без STP — кабель мигает */
+.link.storm { stroke: var(--led-amber); stroke-width: 3; animation: stormblink 0.5s steps(2, start) infinite; }
+@keyframes stormblink { 50% { stroke-opacity: 0.25; } }
 .link.temp { stroke: var(--accent); stroke-dasharray: 5 4; pointer-events: none; }
 .linkhit { stroke: transparent; stroke-width: 12; fill: none; cursor: pointer; }
 .led { stroke: rgba(0,0,0,.35); stroke-width: .6; pointer-events: none; }

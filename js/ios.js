@@ -119,7 +119,13 @@ function iosAcceptParam(type, toks, i, raw) {
     case 'word': return { value: t, consumed: 1 };
     case 'line': return { value: raw.slice(toks[i].pos).trimEnd(), consumed: toks.length - i };
     case 'pfx': return /^\/\d{1,2}$/.test(t) ? { value: Number(t.slice(1)), consumed: 1 } : null;
-    case 'vlans': { const l = parseVlanList(t); return l ? { value: l, consumed: 1 } : null; }
+    case 'vlans': {
+      // как в IOS: «10,20», «10, 20», «10 - 20» — список может быть разбит пробелами
+      let s = t, n = 1;
+      while (i + n < toks.length && (/[,-]$/.test(s) || /^[,-]/.test(toks[i + n].t))) s += toks[i + n++].t;
+      const l = parseVlanList(s);
+      return l ? { value: l, consumed: n } : null;
+    }
     case 'area': {
       if (/^\d+$/.test(t)) return { value: String(Number(t)), consumed: 1 };
       if (isIp(t)) return { value: String(ipToInt(t)), consumed: 1 };
@@ -368,7 +374,10 @@ function iosRun(topo, sess, line, prompt) {
     }
     return { out: iosInvalid(prompt, line, m.pos, toks) };
   }
-  if (fellBack) sess.mode = 'config';
+  if (fellBack) {
+    if (sess.onLeave) { sess.onLeave(); sess.onLeave = null; } // например, отложенные правки MST применяются при выходе из режима
+    sess.mode = 'config';
+  }
   const c = iosCtx(topo, sess, m.params, m.words, line);
   const modeBefore = sess.mode;
   m.handler.fn(c);
@@ -784,7 +793,7 @@ iosDef(['config'], 'crypto key generate rsa general-keys modulus <num>', (c) => 
 });
 iosDef(['config'], 'spanning-tree mode pvst', (c) => { c.cfg.stpMode = 'pvst'; }, { dev: 'switch' });
 iosDef(['config'], 'spanning-tree mode rapid-pvst', (c) => { c.cfg.stpMode = 'rapid-pvst'; }, { dev: 'switch' });
-iosDef(['config'], 'spanning-tree mode mst', (c) => { c.out('% NetTrainer: MST is not simulated — use pvst or rapid-pvst.'); }, { dev: 'switch' });
+iosDef(['config'], 'spanning-tree mode mst', (c) => { c.cfg.stpMode = 'mst'; }, { dev: 'switch' });
 iosDef(['config'], 'cdp run', (c) => { c.cfg.cdp = true; });
 iosDef(['config'], 'no cdp run', (c) => { c.cfg.cdp = false; });
 
@@ -1303,6 +1312,10 @@ function iosShowInterface(topo, dev, n) {
   const hw = n.startsWith('Gigabit') ? 'CN Gigabit Ethernet' : n.startsWith('Fast') ? 'Lance' : n.startsWith('Vlan') ? 'CPU Interface' : n.startsWith('Loopback') ? 'Loopback' : ifKind(n) === 'po' ? 'EtherChannel' : 'Ethernet';
   const lines = [n + ' is ' + s.status + ', line protocol is ' + s.protocol + (s.errdis ? ' (err-disabled)' : s.protocol === 'up' && ifKind(n) === 'phys' ? ' (connected)' : '')];
   lines.push('  Hardware is ' + hw + ', address is ' + mac.toLowerCase() + ' (bia ' + mac.toLowerCase() + ')');
+  if (dev.type === 'switch' && ifKind(n) === 'phys' && swPortStorming(topo, dev, n)) {
+    lines.push('  5 minute input rate 98236000 bits/sec, 151248 packets/sec', '  5 minute output rate 98117000 bits/sec, 150991 packets/sec',
+      '     Received 48211967 broadcasts (48211967 multicasts)');
+  }
   if (ifKind(n) === 'po') {
     const G = ecGroupState(topo, dev, poGroup(n));
     const inPo = G ? Object.keys(G.flags).filter((m) => G.flags[m] === 'P') : [];

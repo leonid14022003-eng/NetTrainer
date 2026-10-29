@@ -109,6 +109,9 @@ button:disabled { opacity: .45; cursor: default; }
 .link { stroke: var(--link); stroke-width: 1.6; fill: none; }
 .link.cross { stroke-dasharray: 7 4; }
 .link.console { stroke: #4aa7e0; stroke-width: 2; }
+/* широковещательный шторм: петля без STP — кабель мигает */
+.link.storm { stroke: var(--led-amber); stroke-width: 3; animation: stormblink 0.5s steps(2, start) infinite; }
+@keyframes stormblink { 50% { stroke-opacity: 0.25; } }
 .link.temp { stroke: var(--accent); stroke-dasharray: 5 4; pointer-events: none; }
 .linkhit { stroke: transparent; stroke-width: 12; fill: none; cursor: pointer; }
 .led { stroke: rgba(0,0,0,.35); stroke-width: .6; pointer-events: none; }
@@ -1436,6 +1439,7 @@ function l2Reach(topo, devId, ifName) {
   // Из коммутатора кадр уходит через каждый логический порт один раз (пучок EtherChannel — через один свой порт),
   // кроме того, через который пришёл, и кроме портов, заблокированных STP в этом VLAN.
   const emitFromSwitch = (sw, vlan, ingressPort, path) => {
+    if (swInStorm(sws, sw, vlan)) return; // широковещательный шторм: в этом VLAN кадры не проходят
     const inLp = ingressPort ? swLogicalPort(sws, sw, ingressPort) : null;
     const used = new Set();
     for (const p of sw.ports) {
@@ -1466,7 +1470,8 @@ function l2Reach(topo, devId, ifName) {
       if (!lp) continue; // порт пучка приостановлен
       const v = swIngressVlan(topo, D, peer.port, it.tag);
       if (v === null) continue;
-      if (stpBlocks(sws, D, lp, v)) continue; // порт в состоянии BLK кадры не принимает
+      if (stpBlocks(sws, D, lp, v)) continue; // порт не в FWD (BLK, LIS, LRN) кадры не передаёт
+      if (swInStorm(sws, D, v)) continue;
       hop.vlan = v;
       const path = it.path.concat([hop]);
       const svi = 'Vlan' + v;
@@ -2373,7 +2378,13 @@ function iosAcceptParam(type, toks, i, raw) {
     case 'word': return { value: t, consumed: 1 };
     case 'line': return { value: raw.slice(toks[i].pos).trimEnd(), consumed: toks.length - i };
     case 'pfx': return /^\/\d{1,2}$/.test(t) ? { value: Number(t.slice(1)), consumed: 1 } : null;
-    case 'vlans': { const l = parseVlanList(t); return l ? { value: l, consumed: 1 } : null; }
+    case 'vlans': {
+      // как в IOS: «10,20», «10, 20», «10 - 20» — список может быть разбит пробелами
+      let s = t, n = 1;
+      while (i + n < toks.length && (/[,-]$/.test(s) || /^[,-]/.test(toks[i + n].t))) s += toks[i + n++].t;
+      const l = parseVlanList(s);
+      return l ? { value: l, consumed: n } : null;
+    }
     case 'area': {
       if (/^\d+$/.test(t)) return { value: String(Number(t)), consumed: 1 };
       if (isIp(t)) return { value: String(ipToInt(t)), consumed: 1 };
@@ -2622,7 +2633,10 @@ function iosRun(topo, sess, line, prompt) {
     }
     return { out: iosInvalid(prompt, line, m.pos, toks) };
   }
-  if (fellBack) sess.mode = 'config';
+  if (fellBack) {
+    if (sess.onLeave) { sess.onLeave(); sess.onLeave = null; } // например, отложенные правки MST применяются при выходе из режима
+    sess.mode = 'config';
+  }
   const c = iosCtx(topo, sess, m.params, m.words, line);
   const modeBefore = sess.mode;
   m.handler.fn(c);
@@ -3038,7 +3052,7 @@ iosDef(['config'], 'crypto key generate rsa general-keys modulus <num>', (c) => 
 });
 iosDef(['config'], 'spanning-tree mode pvst', (c) => { c.cfg.stpMode = 'pvst'; }, { dev: 'switch' });
 iosDef(['config'], 'spanning-tree mode rapid-pvst', (c) => { c.cfg.stpMode = 'rapid-pvst'; }, { dev: 'switch' });
-iosDef(['config'], 'spanning-tree mode mst', (c) => { c.out('% NetTrainer: MST is not simulated — use pvst or rapid-pvst.'); }, { dev: 'switch' });
+iosDef(['config'], 'spanning-tree mode mst', (c) => { c.cfg.stpMode = 'mst'; }, { dev: 'switch' });
 iosDef(['config'], 'cdp run', (c) => { c.cfg.cdp = true; });
 iosDef(['config'], 'no cdp run', (c) => { c.cfg.cdp = false; });
 
@@ -3557,6 +3571,10 @@ function iosShowInterface(topo, dev, n) {
   const hw = n.startsWith('Gigabit') ? 'CN Gigabit Ethernet' : n.startsWith('Fast') ? 'Lance' : n.startsWith('Vlan') ? 'CPU Interface' : n.startsWith('Loopback') ? 'Loopback' : ifKind(n) === 'po' ? 'EtherChannel' : 'Ethernet';
   const lines = [n + ' is ' + s.status + ', line protocol is ' + s.protocol + (s.errdis ? ' (err-disabled)' : s.protocol === 'up' && ifKind(n) === 'phys' ? ' (connected)' : '')];
   lines.push('  Hardware is ' + hw + ', address is ' + mac.toLowerCase() + ' (bia ' + mac.toLowerCase() + ')');
+  if (dev.type === 'switch' && ifKind(n) === 'phys' && swPortStorming(topo, dev, n)) {
+    lines.push('  5 minute input rate 98236000 bits/sec, 151248 packets/sec', '  5 minute output rate 98117000 bits/sec, 150991 packets/sec',
+      '     Received 48211967 broadcasts (48211967 multicasts)');
+  }
   if (ifKind(n) === 'po') {
     const G = ecGroupState(topo, dev, poGroup(n));
     const inPo = G ? Object.keys(G.flags).filter((m) => G.flags[m] === 'P') : [];
@@ -3938,10 +3956,43 @@ function ecCompute(topo) {
 function swState(topo) {
   const rt = netRt(topo);
   if (rt.swCache && rt.swCache.rev === topo.rev) return rt.swCache;
-  const cache = { rev: topo.rev, ec: ecCompute(topo), stp: {} };
+  const cache = { rev: topo.rev, topo, rt, ec: ecCompute(topo), stp: {} };
   rt.swCache = cache;
   cache.stp = stpCompute(topo, cache);
   return cache;
+}
+
+// ---------- Время сети (таймеры STP) ----------
+// Таймеры включает интерфейс для рабочей области и Training (rt.stpTimers); в тестах и проверках заданий
+// их нет — порт сразу FWD. «Fast Forward Time» сдвигает время сети вперёд.
+function netTime(topo) { return Date.now() + (netRt(topo).timeShift || 0); }
+function netAdvance(topo, ms) { const rt = netRt(topo); rt.timeShift = (rt.timeShift || 0) + ms; }
+
+// Всё, что сейчас сходится (listening / learning), считать уже сошедшимся: после загрузки сети или задания
+function swSettle(topo) {
+  const state = swState(topo), rt = state.rt;
+  for (const k of Object.keys(rt.stpSince || {})) rt.stpSince[k] = -Infinity;
+  for (const x of Object.values(state.stp)) for (const d of Object.values(x)) for (const p of Object.values(d.ports)) if (p.since !== null) p.since = -Infinity;
+}
+
+// Выполнить fn так, будто STP давно сошёлся (проверки заданий смотрят на настройку, а не на секунды)
+function swConverged(topo, fn) {
+  const rt = netRt(topo), was = rt.stpConverged;
+  rt.stpConverged = true;
+  try { return fn(); } finally { rt.stpConverged = was; }
+}
+
+// Через сколько мс сменится состояние какого-нибудь порта (null — ничего не ждёт)
+function swNextChange(topo) {
+  const state = swState(topo), rt = state.rt;
+  if (!rt.stpTimers || rt.stpConverged) return null;
+  const now = netTime(topo);
+  let best = null;
+  for (const x of Object.values(state.stp)) for (const d of Object.values(x)) for (const p of Object.values(d.ports)) {
+    if (p.since === null || p.since === -Infinity) continue;
+    for (const t of [p.since + STP_FWD_DELAY, p.since + 2 * STP_FWD_DELAY]) if (t > now && (best === null || t < best)) best = t;
+  }
+  return best === null ? null : best - now;
 }
 
 function ecFlag(state, sw, port) {
@@ -3987,9 +4038,27 @@ function ecNewPo(sw, fromPort) {
 
 // ---------- Spanning Tree ----------
 const STP_PRIO_DEFAULT = 32768;
+const STP_FWD_DELAY = 15000;   // forward delay: listening 15 с + learning 15 с
+function stpMode(sw) { return sw.cfg.stpMode || 'pvst'; }
+function stpOff(sw, v) { return !!(sw.cfg.stpOff && sw.cfg.stpOff[v]); }
 function stpPrio(sw, v) { const p = sw.cfg.stpPrio && sw.cfg.stpPrio[v]; return p === undefined ? STP_PRIO_DEFAULT : p; }
 function swBaseMac(sw) { return sw.ports[0].mac; }
 function stpBid(sw, v) { return { prio: stpPrio(sw, v) + v, mac: swBaseMac(sw) }; }
+
+// MST: экземпляр для VLAN (0 — IST, если VLAN ни к чему не привязан) и «регион» = имя + ревизия + таблица VLAN
+function mstInst(sw, v) { for (const [i, vl] of Object.entries((sw.cfg.mst && sw.cfg.mst.map) || {})) if (vl.includes(v)) return Number(i); return 0; }
+function mstPrio(sw, i) { const p = sw.cfg.mstPrio && sw.cfg.mstPrio[i]; return p === undefined ? STP_PRIO_DEFAULT : p; }
+function mstRegion(sw) {
+  const m = sw.cfg.mst || {};
+  const map = Object.keys(m.map || {}).map(Number).sort((a, b) => a - b).filter((i) => m.map[i].length).map((i) => i + ':' + vlanListStr(m.map[i])).join(';');
+  return (m.name || '') + '|' + (m.rev || 0) + '|' + map;
+}
+// Bridge ID для VLAN: у MST — приоритет экземпляра (cist — только IST, если регион не общий), sys-id-ext = номер экземпляра
+function stpBidFor(sw, v, cist) {
+  if (stpMode(sw) !== 'mst') return stpBid(sw, v);
+  const i = cist ? 0 : mstInst(sw, v);
+  return { prio: mstPrio(sw, i) + i, mac: swBaseMac(sw), inst: i };
+}
 function macVal(mac) { return parseInt(mac.replace(/\./g, ''), 16); }
 function bidLess(a, b) { return a.prio !== b.prio ? a.prio < b.prio : macVal(a.mac) < macVal(b.mac); }
 function stpPortNum(sw, lp) { return lp.startsWith('Port-channel') ? 64 + poGroup(lp) : sw.ports.findIndex((p) => p.name === lp) + 1; }
@@ -4011,6 +4080,7 @@ function stpCostOf(sw, p) {
   const ic = sw.cfg.interfaces[p.lp];
   if (ic && ic.stpCost) return ic.stpCost;
   const sp = portSpeed(p.members[0]), n = p.members.length;
+  if (stpMode(sw) === 'mst') return Math.round(20000000 / (sp * n));   // MST: длинный метод (1 Гбит/с — 20000)
   if (sp >= 1000) return n >= 3 ? 2 : n === 2 ? 3 : 4;
   if (sp >= 100) return n >= 3 ? 9 : n === 2 ? 12 : 19;
   return 100;
@@ -4037,16 +4107,20 @@ function stpPorts(topo, state, sw) {
   return out;
 }
 
-// PVST+: для каждого VLAN — корень, стоимость пути до него, роли и состояния портов
+// Для каждого VLAN — корень, стоимость пути до него, роли портов и время, с которого порт начал сходиться.
+// Коммутатор с «no spanning-tree vlan N» в расчёте не участвует: все его порты в этом VLAN передают.
+// MST: если вся связная часть — один регион, у VLAN приоритеты его экземпляра; иначе MST-коммутаторы играют по IST (CIST).
 function stpCompute(topo, state) {
   const sws = Object.values(topo.devices).filter((d) => d.type === 'switch' && !d.off);
   const all = {};
   for (const S of sws) all[S.id] = stpPorts(topo, state, S);
   const vlans = new Set();
   for (const S of sws) for (const v of Object.keys(S.cfg.vlans)) vlans.add(Number(v));
+  const rt = state.rt, prevSince = rt.stpSince || {}, nextSince = {}, now = netTime(topo);
+  const rapid = (d) => stpMode(d) !== 'pvst';
   const res = {};
   for (const v of [...vlans].sort((a, b) => a - b)) {
-    const inV = sws.filter((S) => S.cfg.vlans[v]);
+    const inV = sws.filter((S) => S.cfg.vlans[v] && !stpOff(S, v));
     const lps = {};
     for (const S of inV) lps[S.id] = all[S.id].filter((p) => swEgressTag(topo, S, p.rep, v) !== undefined);
     const find = (devId, lp) => (lps[devId] || []).find((x) => x.lp === lp);
@@ -4062,8 +4136,9 @@ function stpCompute(topo, state) {
         comp.push(S);
         for (const p of lps[S.id]) { const n = nb(p); if (n && !seen.has(n.dev.id)) { seen.add(n.dev.id); queue.push(n.dev); } }
       }
+      const oneRegion = comp.every((S) => stpMode(S) === 'mst') && new Set(comp.map(mstRegion)).size === 1;
       const bid = {};
-      for (const S of comp) bid[S.id] = stpBid(S, v);
+      for (const S of comp) bid[S.id] = stpBidFor(S, v, !oneRegion);
       let root = comp[0];
       for (const S of comp) if (bidLess(bid[S.id], bid[root.id])) root = S;
       // стоимость до корня: сумма стоимостей входящих портов (Дейкстра)
@@ -4089,7 +4164,7 @@ function stpCompute(topo, state) {
           const key = [rpc[n.dev.id] + stpCostOf(S, p), bid[n.dev.id], stpPid(n.dev, n.port.lp), stpPid(S, p.lp)];
           if (!best || stpLess(key, best.key)) best = { key, lp: p.lp };
         }
-        res[v][S.id] = { root: root.id, rootBid: bid[root.id], bid: bid[S.id], rpc: rpc[S.id], rootPort: best ? best.lp : null, ports: {} };
+        res[v][S.id] = { root: root.id, rootBid: bid[root.id], bid: bid[S.id], rpc: rpc[S.id], rootPort: best ? best.lp : null, ports: {}, region: oneRegion };
       }
       // назначенный порт сегмента — у той стороны, что ближе к корню; остальные — Alternate (BLK)
       for (const S of comp) {
@@ -4101,19 +4176,90 @@ function stpCompute(topo, state) {
           else if (n && !stpLess([rpc[S.id], bid[S.id], stpPid(S, p.lp)], [rpc[n.dev.id], bid[n.dev.id], stpPid(n.dev, n.port.lp)])) role = 'Altn';
           const ic = S.cfg.interfaces[p.lp] || {};
           const edge = ic.portfast || (S.cfg.portfastDefault && swOperMode(topo, S, p.rep) === 'access');
-          info.ports[p.lp] = { role, sts: role === 'Altn' ? 'BLK' : 'FWD', cost: stpCostOf(S, p), pid: stpPortPrio(S, p.lp) + '.' + stpPortNum(S, p.lp),
-            type: p.kind === 'shared' ? 'Shr' : edge ? 'P2p Edge' : 'P2p' };
+          let type = p.kind === 'shared' ? 'Shr' : edge ? 'P2p Edge' : 'P2p';
+          if (stpMode(S) === 'mst' && n && (stpMode(n.dev) !== 'mst' || mstRegion(n.dev) !== mstRegion(S))) type += ' Bound(' + (stpMode(n.dev) === 'mst' ? 'RSTP' : 'PVST') + ')';
+          // в FWD сразу: PortFast или канал между двумя коммутаторами RSTP / MST (proposal / agreement); иначе 15 + 15 с
+          const fast = edge || (p.kind === 'p2p' && n && rapid(S) && rapid(n.dev));
+          let since = null;
+          if (role !== 'Altn') {
+            const k = v + '|' + S.id + '|' + p.lp;
+            since = prevSince[k];
+            if (since === undefined) since = fast || !rt.stpTimers ? -Infinity : now;
+            nextSince[k] = since;
+          }
+          info.ports[p.lp] = { role, cost: stpCostOf(S, p), pid: stpPortPrio(S, p.lp) + '.' + stpPortNum(S, p.lp), type, since, rapid: rapid(S) };
         }
       }
     }
   }
+  rt.stpSince = nextSince;
   return res;
+}
+
+// Состояние порта сейчас: BLK (Alternate или RSTP discarding), LIS, LRN, FWD
+function stpSts(state, p) {
+  if (p.role === 'Altn') return 'BLK';
+  const rt = state.rt;
+  if (rt.stpConverged || !rt.stpTimers || p.since === -Infinity) return 'FWD';
+  const dt = netTime(state.topo) - p.since;
+  return dt >= 2 * STP_FWD_DELAY ? 'FWD' : dt >= STP_FWD_DELAY ? 'LRN' : p.rapid ? 'BLK' : 'LIS';
 }
 
 function stpBlocks(state, sw, lp, v) {
   const x = state.stp[v] && state.stp[v][sw.id];
   const p = x && x.ports[lp];
-  return !!(p && p.sts === 'BLK');
+  return !!(p && stpSts(state, p) !== 'FWD');
+}
+
+// ---------- Широковещательный шторм ----------
+// Если в VLAN остался цикл из передающих каналов между коммутаторами (STP выключен или не дошёл до петли),
+// broadcast размножаются без конца: кадры этого VLAN в этой части сети больше не проходят.
+function swStorm(state, v) {
+  const rt = state.rt, topo = state.topo;
+  const key = v + '|' + (rt.stpConverged || !rt.stpTimers ? 'c' : Math.floor(netTime(topo) / 1000));
+  const memo = state.stormMemo || (state.stormMemo = {});
+  if (memo[key]) return memo[key];
+  const parent = {}, cyc = new Set();
+  const find = (x) => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
+  const sws = Object.values(topo.devices).filter((d) => d.type === 'switch' && !d.off && d.cfg.vlans[v]);
+  for (const S of sws) parent[S.id] = S.id;
+  const seen = new Set();
+  const fwd = (S, port) => {
+    const lp = swLogicalPort(state, S, port);
+    return lp && swEgressTag(topo, S, port, v) !== undefined && !stpBlocks(state, S, lp, v) ? lp : null;
+  };
+  for (const S of sws) for (const p of S.ports) {
+    if (p.console || !portPhysUp(topo, S.id, p.name)) continue;
+    const peer = linkPeer(topo, S.id, p.name);
+    if (parent[peer.dev] === undefined) continue;
+    const P = topo.devices[peer.dev];
+    const a = fwd(S, p.name), b = fwd(P, peer.port);
+    if (!a || !b) continue;
+    const k = [S.id + '|' + a, P.id + '|' + b].sort().join('~');   // пучок EtherChannel — одно ребро
+    if (seen.has(k)) continue;
+    seen.add(k);
+    const ra = find(S.id), rb = find(P.id);
+    if (ra === rb) cyc.add(ra);
+    else { parent[ra] = rb; if (cyc.has(ra)) cyc.add(rb); }
+  }
+  const out = new Set();
+  for (const S of sws) if (cyc.has(find(S.id))) out.add(S.id);
+  memo[key] = out;
+  return out;
+}
+function swInStorm(state, sw, v) { return swStorm(state, v).has(sw.id); }
+
+// Кабель между коммутаторами, по которому крутится шторм (для мигания на схеме)
+function swLinkStorm(topo, l) {
+  const A = topo.devices[l.a.dev], B = topo.devices[l.b.dev];
+  return A.type === 'switch' && B.type === 'switch' && portPhysUp(topo, A.id, l.a.port) && swPortStorming(topo, A, l.a.port) && swPortStorming(topo, B, l.b.port);
+}
+
+// Порт коммутатора в шторме хотя бы в одном своём VLAN
+function swPortStorming(topo, sw, port) {
+  const state = swState(topo);
+  for (const v of Object.keys(sw.cfg.vlans).map(Number)) if (swEgressTag(topo, sw, port, v) !== undefined && swInStorm(state, sw, v)) return true;
+  return false;
 }
 
 // Корень VLAN для коммутатора (id устройства) или null
@@ -4131,7 +4277,7 @@ function swPortLed(topo, sw, port) {
     const p = x && x.ports[lp];
     if (!p) continue;
     any = true;
-    if (p.sts === 'FWD') fwd = true;
+    if (stpSts(state, p) === 'FWD') fwd = true;
   }
   return any && !fwd ? 'blocked' : null;
 }
@@ -4155,7 +4301,7 @@ function swGuards(topo) {
       if (swBpduGuardOn(S, ic, p.name, topo) && topo.devices[peer.dev].type === 'switch') hits.push([S, p.name, 'bpduguard']);
       else if (ecFlag(state, S, p.name) === 'M') hits.push([S, p.name, 'channel-misconfig']);
     }
-    if (!hits.length) return;
+    if (!hits.length) break;
     for (const [S, n, why] of hits) {
       const ic = S.cfg.interfaces[n];
       ic.errdis = why;
@@ -4166,33 +4312,118 @@ function swGuards(topo) {
     }
     touch(topo);
   }
+  swStormLog(topo);
+}
+
+// Когда начинается шторм, коммутатор видит один и тот же MAC то на одном порту, то на другом
+function swStormLog(topo) {
+  const state = swState(topo), rt = state.rt;
+  const vlans = new Set();
+  for (const d of Object.values(topo.devices)) if (d.type === 'switch') for (const v of Object.keys(d.cfg.vlans)) vlans.add(Number(v));
+  const now = new Set(), prev = rt.stormPrev || new Set();
+  for (const v of vlans) for (const id of swStorm(state, v)) {
+    const k = v + '|' + id;
+    now.add(k);
+    if (prev.has(k)) continue;
+    const S = topo.devices[id];
+    const ports = S.ports.filter((p) => !p.console && portPhysUp(topo, id, p.name) && topo.devices[linkPeer(topo, id, p.name).dev].type === 'switch'
+      && swEgressTag(topo, S, p.name, v) !== undefined).map((p) => swLogicalPort(state, S, p.name)).filter(Boolean);
+    const two = [...new Set(ports)];
+    if (two.length < 2) continue;
+    const host = Object.values(topo.devices).find((d) => d.type === 'pc' && d.ports[0].link);
+    const mac = (host ? host.ports[0].mac : swBaseMac(S)).toLowerCase();
+    pushConsole(topo, id, '%SW_MATM-4-MACFLAP_NOTIF: Host ' + mac + ' in vlan ' + v + ' is flapping between port ' + ifShort(two[0]) + ' and port ' + ifShort(two[1]));
+  }
+  rt.stormPrev = now;
 }
 
 // ---------- show-выводы ----------
-function stpProto(sw) { return sw.cfg.stpMode === 'rapid-pvst' ? 'rstp' : 'ieee'; }
+function stpProto(sw) { return { 'rapid-pvst': 'rstp', mst: 'mstp' }[stpMode(sw)] || 'ieee'; }
+
+// Один блок show spanning-tree: VLAN (PVST+) или экземпляр MST
+function stpBlock(state, dev, title, x, prioLine) {
+  const hello = '             Hello Time  2 sec  Max Age 20 sec  Forward Delay 15 sec';
+  const out = [title, '  Spanning tree enabled protocol ' + stpProto(dev), '  Root ID    Priority    ' + x.rootBid.prio, '             Address     ' + x.rootBid.mac];
+  if (x.root === dev.id) out.push('             This bridge is the root');
+  else out.push('             Cost        ' + x.rpc, '             Port        ' + stpPortNum(dev, x.rootPort) + '(' + x.rootPort + ')');
+  out.push(hello, '', '  Bridge ID  Priority    ' + x.bid.prio + '  ' + prioLine, '             Address     ' + x.bid.mac, hello,
+    '             Aging Time  300 sec', '', 'Interface        Role Sts Cost      Prio.Nbr Type', '---------------- ---- --- --------- -------- --------------------------------');
+  for (const n of Object.keys(x.ports).sort((a, b) => stpPortNum(dev, a) - stpPortNum(dev, b))) {
+    const p = x.ports[n];
+    out.push(padR(ifShort(n), 17) + padR(p.role, 5) + padR(stpSts(state, p), 4) + padR(p.cost, 10) + padR(p.pid, 9) + p.type);
+  }
+  return out.concat(['']);
+}
+
+// Представительный VLAN экземпляра MST на этом коммутаторе (по нему видно дерево экземпляра)
+function mstVlanOf(state, dev, i) {
+  return Object.keys(state.stp).map(Number).find((v) => mstInst(dev, v) === i && state.stp[v][dev.id] && Object.keys(state.stp[v][dev.id].ports).length);
+}
+function mstInstances(dev) { return [0].concat(Object.keys((dev.cfg.mst && dev.cfg.mst.map) || {}).map(Number).filter((i) => dev.cfg.mst.map[i].length).sort((a, b) => a - b)); }
 
 function iosShowStp(topo, dev, only) {
   const state = swState(topo);
+  if (stpMode(dev) === 'mst' && only === undefined) {
+    const out = [];
+    for (const i of mstInstances(dev)) {
+      const v = mstVlanOf(state, dev, i);
+      if (v === undefined) continue;
+      out.push(...stpBlock(state, dev, 'MST' + i, state.stp[v][dev.id], '(priority ' + mstPrio(dev, i) + ' sys-id-ext ' + i + ')'));
+    }
+    return out.length ? out.join('\n').replace(/\n+$/, '') : 'No spanning tree instance exists.';
+  }
   const vlans = Object.keys(state.stp).map(Number).filter((v) => state.stp[v][dev.id] && Object.keys(state.stp[v][dev.id].ports).length && (only === undefined || v === only));
   if (!vlans.length) return only === undefined ? 'No spanning tree instance exists.' : 'Spanning tree instance(s) for vlan ' + only + ' does not exist.';
   const out = [];
   for (const v of vlans) {
     const x = state.stp[v][dev.id];
-    const hello = '             Hello Time  2 sec  Max Age 20 sec  Forward Delay 15 sec';
-    out.push('VLAN' + String(v).padStart(4, '0'), '  Spanning tree enabled protocol ' + stpProto(dev),
-      '  Root ID    Priority    ' + x.rootBid.prio, '             Address     ' + x.rootBid.mac);
-    if (x.root === dev.id) out.push('             This bridge is the root');
-    else out.push('             Cost        ' + x.rpc, '             Port        ' + stpPortNum(dev, x.rootPort) + '(' + x.rootPort + ')');
-    out.push(hello, '', '  Bridge ID  Priority    ' + x.bid.prio + '  (priority ' + stpPrio(dev, v) + ' sys-id-ext ' + v + ')', '             Address     ' + x.bid.mac, hello,
-      '             Aging Time  300 sec', '', 'Interface        Role Sts Cost      Prio.Nbr Type', '---------------- ---- --- --------- -------- --------------------------------');
-    const names = Object.keys(x.ports).sort((a, b) => stpPortNum(dev, a) - stpPortNum(dev, b));
-    for (const n of names) {
-      const p = x.ports[n];
-      out.push(padR(ifShort(n), 17) + padR(p.role, 5) + padR(p.sts, 4) + padR(p.cost, 10) + padR(p.pid, 9) + p.type);
-    }
-    out.push('');
+    const title = stpMode(dev) === 'mst' ? 'MST' + mstInst(dev, v) : 'VLAN' + String(v).padStart(4, '0');
+    const pl = stpMode(dev) === 'mst' ? '(priority ' + mstPrio(dev, x.bid.inst) + ' sys-id-ext ' + x.bid.inst + ')' : '(priority ' + stpPrio(dev, v) + ' sys-id-ext ' + v + ')';
+    out.push(...stpBlock(state, dev, title, x, pl));
   }
   return out.join('\n').replace(/\n+$/, '');
+}
+
+function mstMapText(map) {
+  const used = new Set();
+  for (const vl of Object.values(map || {})) for (const v of vl) used.add(v);
+  const rest = [];
+  for (let v = 1; v <= 4094; v++) if (!used.has(v)) rest.push(v);
+  return rest;
+}
+
+function iosShowMstConfig(mst) {
+  const m = mst || { name: '', rev: 0, map: {} };
+  const inst = Object.keys(m.map || {}).map(Number).filter((i) => m.map[i].length).sort((a, b) => a - b);
+  const out = ['Name      [' + (m.name || '') + ']', 'Revision  ' + padR(m.rev || 0, 6) + 'Instances configured ' + (inst.length + 1), '',
+    'Instance  Vlans mapped', '--------  ---------------------------------------------------------------------', padR(0, 10) + vlanListStr(mstMapText(m.map))];
+  for (const i of inst) out.push(padR(i, 10) + vlanListStr(m.map[i]));
+  out.push('-------------------------------------------------------------------------------');
+  return out.join('\n');
+}
+
+function iosShowMst(topo, dev, only) {
+  if (stpMode(dev) !== 'mst') return '% Switch is not in mst mode';
+  const state = swState(topo);
+  const out = [];
+  for (const i of mstInstances(dev)) {
+    if (only !== undefined && i !== only) continue;
+    const vl = i === 0 ? mstMapText(dev.cfg.mst && dev.cfg.mst.map) : dev.cfg.mst.map[i];
+    out.push('', '##### MST' + i + '    vlans mapped:   ' + vlanListStr(vl));
+    const v = mstVlanOf(state, dev, i);
+    if (v === undefined) { out.push('(no active ports in this instance)'); continue; }
+    const x = state.stp[v][dev.id];
+    out.push('Bridge        address ' + x.bid.mac.toLowerCase() + '  priority      ' + x.bid.prio + ' (' + mstPrio(dev, i) + ' sysid ' + i + ')',
+      'Root          ' + (x.root === dev.id ? 'this switch for ' + (i === 0 ? 'the CIST' : 'MST' + i) : 'address ' + x.rootBid.mac.toLowerCase() + '  priority      ' + x.rootBid.prio),
+      ...(x.root === dev.id ? [] : ['              port    ' + ifShort(x.rootPort) + '            cost        ' + x.rpc]),
+      ...(i === 0 ? ['Operational   hello time 2 , forward delay 15, max age 20, txholdcount 6', 'Configured    hello time 2 , forward delay 15, max age 20, max hops    20'] : []),
+      '', 'Interface        Role Sts Cost      Prio.Nbr Type', '---------------- ---- --- --------- -------- --------------------------------');
+    for (const n of Object.keys(x.ports).sort((a, b) => stpPortNum(dev, a) - stpPortNum(dev, b))) {
+      const p = x.ports[n];
+      out.push(padR(ifShort(n), 17) + padR(p.role, 5) + padR(stpSts(state, p), 4) + padR(p.cost, 10) + padR(p.pid, 9) + p.type);
+    }
+  }
+  return out.join('\n').replace(/^\n/, '');
 }
 
 function iosShowStpSummary(topo, dev) {
@@ -4203,14 +4434,14 @@ function iosShowStpSummary(topo, dev) {
     'Extended system ID           is enabled', 'Portfast Default             is ' + (dev.cfg.portfastDefault ? 'enabled' : 'disabled'),
     'PortFast BPDU Guard Default  is ' + (dev.cfg.bpduguardDefault ? 'enabled' : 'disabled'), 'EtherChannel misconfig guard is enabled', '',
     'Name                   Blocking Listening Learning Forwarding STP Active', '---------------------- -------- --------- -------- ---------- ----------'];
-  let tb = 0, tf = 0;
+  const tot = [0, 0, 0, 0];
   for (const v of vlans) {
-    const ps = Object.values(state.stp[v][dev.id].ports);
-    const b = ps.filter((p) => p.sts === 'BLK').length, f = ps.length - b;
-    tb += b; tf += f;
-    out.push(padR('VLAN' + String(v).padStart(4, '0'), 23) + padR(b, 9) + padR(0, 10) + padR(0, 9) + padR(f, 11) + ps.length);
+    const ps = Object.values(state.stp[v][dev.id].ports).map((p) => stpSts(state, p));
+    const c = ['BLK', 'LIS', 'LRN', 'FWD'].map((s) => ps.filter((x) => x === s).length);
+    c.forEach((n, i) => { tot[i] += n; });
+    out.push(padR('VLAN' + String(v).padStart(4, '0'), 23) + padR(c[0], 9) + padR(c[1], 10) + padR(c[2], 9) + padR(c[3], 11) + ps.length);
   }
-  out.push('---------------------- -------- --------- -------- ---------- ----------', padR(vlans.length + ' vlans', 23) + padR(tb, 9) + padR(0, 10) + padR(0, 9) + padR(tf, 11) + (tb + tf));
+  out.push('---------------------- -------- --------- -------- ---------- ----------', padR(vlans.length + ' vlans', 23) + padR(tot[0], 9) + padR(tot[1], 10) + padR(tot[2], 9) + padR(tot[3], 11) + tot.reduce((a, b) => a + b, 0));
   return out.join('\n');
 }
 
@@ -4232,6 +4463,16 @@ function iosShowEtherchannel(topo, dev) {
 // ---------- running-config ----------
 function swRunningGlobal(cfg) {
   const L = [];
+  if (cfg.mst && (cfg.mst.name || cfg.mst.rev || Object.values(cfg.mst.map || {}).some((x) => x.length))) {
+    L.push('spanning-tree mst configuration');
+    if (cfg.mst.name) L.push(' name ' + cfg.mst.name);
+    if (cfg.mst.rev) L.push(' revision ' + cfg.mst.rev);
+    for (const i of Object.keys(cfg.mst.map || {}).map(Number).sort((a, b) => a - b)) if (cfg.mst.map[i].length) L.push(' instance ' + i + ' vlan ' + vlanListStr(cfg.mst.map[i]).replace(/,/g, ', '));
+    L.push('!');
+  }
+  for (const i of Object.keys(cfg.mstPrio || {}).map(Number).sort((a, b) => a - b)) L.push('spanning-tree mst ' + i + ' priority ' + cfg.mstPrio[i]);
+  const off = Object.keys(cfg.stpOff || {}).map(Number).filter((v) => cfg.stpOff[v]).sort((a, b) => a - b);
+  if (off.length) L.push('no spanning-tree vlan ' + vlanListStr(off));
   if (cfg.portfastDefault) L.push('spanning-tree portfast default');
   if (cfg.bpduguardDefault) L.push('spanning-tree portfast bpduguard default');
   for (const v of Object.keys(cfg.stpPrio || {}).map(Number).sort((a, b) => a - b)) L.push('spanning-tree vlan ' + v + ' priority ' + cfg.stpPrio[v]);
@@ -4278,6 +4519,64 @@ iosDef(['config'], 'spanning-tree vlan <vlans> root primary', (c) => {
   }
 }, { dev: 'switch' });
 iosDef(['config'], 'spanning-tree vlan <vlans> root secondary', (c) => stpSetPrio(c, c.p[0], 28672), { dev: 'switch' });
+// выключить / включить STP в VLAN: без него каждая петля превращается в широковещательный шторм
+iosDef(['config'], 'no spanning-tree vlan <vlans>', (c) => { c.cfg.stpOff = c.cfg.stpOff || {}; for (const v of c.p[0]) c.cfg.stpOff[v] = true; }, { dev: 'switch' });
+iosDef(['config'], 'spanning-tree vlan <vlans>', (c) => { for (const v of c.p[0]) if (c.cfg.stpOff) delete c.cfg.stpOff[v]; }, { dev: 'switch' });
+
+// ---------- MST ----------
+iosDef(['config'], 'spanning-tree mst <num> priority <num>', (c) => {
+  if (c.p[0] > 4094 || c.p[1] > 61440 || c.p[1] % 4096) { c.out(c.p[0] > 4094 ? iosInvalidHere(c) : STP_PRIO_LIST); return; }
+  (c.cfg.mstPrio = c.cfg.mstPrio || {})[c.p[0]] = c.p[1];
+}, { dev: 'switch' });
+iosDef(['config'], 'no spanning-tree mst <num> priority', (c) => { if (c.cfg.mstPrio) delete c.cfg.mstPrio[c.p[0]]; }, { dev: 'switch' });
+iosDef(['config'], 'no spanning-tree mst <num> root', (c) => { if (c.cfg.mstPrio) delete c.cfg.mstPrio[c.p[0]]; }, { dev: 'switch' });
+iosDef(['config'], 'spanning-tree mst <num> root primary', (c) => {
+  const i = c.p[0];
+  const v = Object.keys(c.cfg.vlans).map(Number).find((x) => mstInst(c.dev, x) === i);
+  const rootId = v !== undefined ? stpRootOf(c.topo, c.dev.id, v) : null;
+  const R = rootId && c.topo.devices[rootId];
+  const rp = !R ? STP_PRIO_DEFAULT : stpMode(R) === 'mst' ? mstPrio(R, i) : stpPrio(R, v);
+  let prio = 24576;
+  if (R && R !== c.dev && rp <= 24576) prio = rp - 4096;
+  if (R === c.dev && rp <= 24576) prio = rp;
+  if (prio < 0) { c.out('% Failed to make the bridge root for MST' + i); return; }
+  (c.cfg.mstPrio = c.cfg.mstPrio || {})[i] = prio;
+}, { dev: 'switch' });
+iosDef(['config'], 'spanning-tree mst <num> root secondary', (c) => { (c.cfg.mstPrio = c.cfg.mstPrio || {})[c.p[0]] = 28672; }, { dev: 'switch' });
+
+// spanning-tree mst configuration: как в IOS, правки копятся и применяются при выходе (abort — отменить)
+IOS_SUFFIX.mst = '(config-mst)#';
+if (!IOS_CONFIG_SUBMODES.includes('mst')) IOS_CONFIG_SUBMODES.push('mst');
+function mstApply(c) {
+  if (!c.sess.mstEdit) return;
+  c.cfg.mst = c.sess.mstEdit;
+  c.sess.mstEdit = null;
+  c.sess.onLeave = null;
+}
+iosDef(['config'], 'spanning-tree mst configuration', (c) => {
+  const cur = c.cfg.mst || { name: '', rev: 0, map: {} };
+  c.sess.mstEdit = JSON.parse(JSON.stringify(cur));
+  const cfg = c.cfg, sess = c.sess;
+  sess.onLeave = () => { if (sess.mstEdit) { cfg.mst = sess.mstEdit; sess.mstEdit = null; } };
+  c.sess.mode = 'mst';
+}, { dev: 'switch' });
+iosDef(['mst'], 'name <word>', (c) => { c.sess.mstEdit.name = c.p[0]; }, { dev: 'switch' });
+iosDef(['mst'], 'no name', (c) => { c.sess.mstEdit.name = ''; }, { dev: 'switch' });
+iosDef(['mst'], 'revision <num>', (c) => { if (c.p[0] > 65535) { c.out(iosInvalidHere(c)); return; } c.sess.mstEdit.rev = c.p[0]; }, { dev: 'switch' });
+iosDef(['mst'], 'instance <num> vlan <vlans>', (c) => {
+  const i = c.p[0];
+  if (i < 1 || i > 4094) { c.out(iosInvalidHere(c)); return; }
+  const map = c.sess.mstEdit.map;
+  for (const k of Object.keys(map)) map[k] = map[k].filter((v) => !c.p[1].includes(v));   // VLAN — только в одном экземпляре
+  map[i] = [...new Set((map[i] || []).concat(c.p[1]))].sort((a, b) => a - b);
+}, { dev: 'switch' });
+iosDef(['mst'], 'no instance <num>', (c) => { delete c.sess.mstEdit.map[c.p[0]]; }, { dev: 'switch' });
+iosDef(['mst'], 'no instance <num> vlan <vlans>', (c) => { const m = c.sess.mstEdit.map; if (m[c.p[0]]) m[c.p[0]] = m[c.p[0]].filter((v) => !c.p[1].includes(v)); }, { dev: 'switch' });
+iosDef(['mst'], 'show pending', (c) => c.out('Pending MST configuration\n' + iosShowMstConfig(c.sess.mstEdit)), { dev: 'switch', ro: true });
+iosDef(['mst'], 'show current', (c) => c.out('Current MST configuration\n' + iosShowMstConfig(c.cfg.mst)), { dev: 'switch', ro: true });
+iosDef(['mst'], 'exit', (c) => { mstApply(c); c.sess.mode = 'config'; }, { dev: 'switch' });
+iosDef(['mst'], 'end', (c) => { mstApply(c); c.sess.mode = 'priv'; }, { dev: 'switch' });
+iosDef(['mst'], 'abort', (c) => { c.sess.mstEdit = null; c.sess.onLeave = null; c.sess.mode = 'config'; }, { dev: 'switch', ro: true });
 iosDef(['config'], 'spanning-tree portfast default', (c) => {
   c.cfg.portfastDefault = true;
   c.out('%Warning: this command enables portfast by default on all interfaces. You\n should now disable portfast explicitly on switched ports leading to hubs,\n switches and bridges as they may create temporary bridging loops.');
@@ -4327,6 +4626,9 @@ STPIF('spanning-tree link-type point-to-point', () => {});
 SHOW('spanning-tree', (c) => c.out(iosShowStp(c.topo, c.dev)), { dev: 'switch' });
 SHOW('spanning-tree vlan <num>', (c) => c.out(iosShowStp(c.topo, c.dev, c.p[0])), { dev: 'switch' });
 SHOW('spanning-tree summary', (c) => c.out(iosShowStpSummary(c.topo, c.dev)), { dev: 'switch' });
+SHOW('spanning-tree mst', (c) => c.out(iosShowMst(c.topo, c.dev)), { dev: 'switch' });
+SHOW('spanning-tree mst <num>', (c) => c.out(iosShowMst(c.topo, c.dev, c.p[0])), { dev: 'switch' });
+SHOW('spanning-tree mst configuration', (c) => c.out(iosShowMstConfig(c.cfg.mst)), { dev: 'switch' });
 SHOW('etherchannel summary', (c) => c.out(iosShowEtherchannel(c.topo, c.dev)), { dev: 'switch' });
 SHOW('etherchannel load-balance', (c) => c.out('EtherChannel Load-Balancing Configuration:\n        ' + (c.cfg.ecLb || 'src-mac')), { dev: 'switch' });
 
@@ -4339,6 +4641,9 @@ Object.assign(IOS_HELP, {
   secondary: 'Configure switch as secondary root', cost: 'Change an interface\'s spanning tree port path cost', 'port-priority': 'Change an interface\'s spanning tree port priority',
   portfast: 'Spanning tree portfast options', bpduguard: 'Don\'t accept BPDUs on this interface',
   'rapid-pvst': 'Per-Vlan rapid spanning tree mode', pvst: 'Per-Vlan spanning tree mode', 'link-type': 'Specify a link type for spanning tree protocol use',
+  mst: 'Multiple spanning tree configuration', configuration: 'Enter MST configuration submode', revision: 'Set configuration revision number',
+  instance: 'Map vlans to an MST instance', abort: 'Exit region configuration mode, aborting changes', pending: 'Display the new MST configuration to be applied',
+  current: 'Display the current MST configuration',
 });
 
 </script>
@@ -4936,6 +5241,43 @@ const CHK = {
       },
     };
   },
+  stpOn(sw, v) {
+    return {
+      label: T(sw + ': Spanning Tree runs for VLAN ' + v, sw + ': Spanning Tree работает в VLAN ' + v, 'ב-' + sw + ': ‏Spanning Tree פועל ב-VLAN ' + v),
+      run(topo) {
+        return stpOff(topo.devices[sw], v) ? { ok: false, hint: T('STP is turned off for VLAN ' + v + ' (running-config: no spanning-tree vlan ' + v + ').', 'STP выключен для VLAN ' + v + ' (в running-config: no spanning-tree vlan ' + v + ').', 'STP כבוי ל-VLAN ' + v + ' (ב-running-config: ‏no spanning-tree vlan ' + v + ').') } : { ok: true };
+      },
+    };
+  },
+  mstRegion(sw, name, rev, map) {
+    const txt = Object.keys(map).map((i) => i + ' → ' + vlanListStr(map[i])).join(', ');
+    return {
+      label: T(sw + ': MST region "' + name + '", revision ' + rev + ', instances ' + txt, sw + ': регион MST «' + name + '», ревизия ' + rev + ', экземпляры ' + txt, 'ב-' + sw + ': אזור MST ‏"' + name + '", ‏revision ' + rev + ', מופעים ' + txt),
+      run(topo) {
+        const d = topo.devices[sw], m = d.cfg.mst || { name: '', rev: 0, map: {} };
+        if (stpMode(d) !== 'mst') return { ok: false, hint: T('The switch runs ' + stpMode(d) + ', not MST.', 'Коммутатор работает в режиме ' + stpMode(d) + ', а не MST.', 'המתג במצב ' + stpMode(d) + ' ולא MST.') };
+        if (m.name !== name) return { ok: false, hint: T('Region name is "' + (m.name || '') + '" — must be "' + name + '" (case matters).', 'Имя региона «' + (m.name || '') + '» — нужно «' + name + '» (регистр важен).', 'שם האזור "' + (m.name || '') + '" — צריך "' + name + '" (אותיות גדולות וקטנות חשובות).') };
+        if ((m.rev || 0) !== rev) return { ok: false, hint: T('Revision is ' + (m.rev || 0) + ' — must be ' + rev + '.', 'Ревизия ' + (m.rev || 0) + ' — нужна ' + rev + '.', 'ה-revision הוא ' + (m.rev || 0) + ' — צריך ' + rev + '.') };
+        for (const i of Object.keys(map)) {
+          const have = vlanListStr((m.map || {})[i] || []);
+          if (have !== vlanListStr(map[i])) return { ok: false, hint: T('Instance ' + i + ' has VLANs ' + have + ' — must be ' + vlanListStr(map[i]) + '.', 'В экземпляре ' + i + ' VLAN ' + have + ' — нужны ' + vlanListStr(map[i]) + '.', 'במופע ' + i + ' יש VLAN ' + have + ' — צריך ' + vlanListStr(map[i]) + '.') };
+        }
+        return { ok: true };
+      },
+    };
+  },
+  mstRoot(sw, inst, v) {
+    return {
+      label: T(sw + ' is the root of MST instance ' + inst, sw + ' — корень экземпляра MST ' + inst, sw + ' הוא ה-root של מופע MST ' + inst),
+      run(topo) {
+        const r = stpRootOf(topo, sw, v);
+        if (r === sw) return { ok: true };
+        const x = swState(topo).stp[v][sw];
+        const why = x && !x.region ? T(' The switches are not one region yet, so instance ' + inst + ' does not work — instance 0 (IST) decides.', ' Коммутаторы ещё не один регион, поэтому экземпляр ' + inst + ' не действует — решает экземпляр 0 (IST).', ' המתגים עדיין לא אזור אחד, ולכן מופע ' + inst + ' לא פועל — מופע 0 ‏(IST) מחליט.') : T('', '', '');
+        return { ok: false, hint: T('Now the root for VLAN ' + v + ' is ' + r + '.' + why.en, 'Сейчас корень для VLAN ' + v + ' — ' + r + '.' + why.ru, 'עכשיו ה-root של VLAN ' + v + ' הוא ' + r + '.' + why.he) };
+      },
+    };
+  },
   // --- EtherChannel ---
   ecUp(sw, g, count, proto) {
     const pn = (p) => (p === '-' ? 'mode on' : p);
@@ -5503,6 +5845,72 @@ taskDef('stp-edge', 'stp', 1, (rng) => {
   };
 });
 
+taskDef('ts-storm', 'stp', 2, (rng) => {
+  const ids = ['S1', 'S2', 'S3'];
+  const tri = stpTriangle(rng, ids, rng.pick(ids));
+  const [a, , c] = tri.pcs;
+  return {
+    title: T('Troubleshoot: the whole LAN suddenly stopped', 'Неисправность: вся сеть вдруг встала', 'איתור תקלות: כל הרשת נעצרה פתאום'),
+    intro: T('After "a small optimisation" by a colleague nobody can reach anyone: even PCs on neighbouring switches do not ping, and the switch consoles are full of messages. The three switches are cabled in a triangle. Find what was changed and fix it.',
+      'После «небольшой оптимизации» от коллеги никто никого не видит: не пингуются даже ПК на соседних коммутаторах, а консоли коммутаторов забиты сообщениями. Три коммутатора соединены треугольником. Найдите, что изменили, и исправьте.',
+      'אחרי "אופטימיזציה קטנה" של עמית אף אחד לא מגיע לאף אחד: אפילו מחשבים במתגים סמוכים לא עוברים ping, והקונסולות של המתגים מלאות בהודעות. שלושת המתגים מחוברים במשולש. יש למצוא מה שונה ולתקן.'),
+    steps: [T('Open a switch console: what does %SW_MATM-4-MACFLAP_NOTIF tell you?', 'Откройте консоль коммутатора: о чём говорит %SW_MATM-4-MACFLAP_NOTIF?', 'לפתוח קונסולה של מתג: מה אומרת ההודעה %SW_MATM-4-MACFLAP_NOTIF?'),
+      T('Useful commands: show spanning-tree, show running-config, show interfaces (look at the broadcast counters).', 'Полезные команды: show spanning-tree, show running-config, show interfaces (посмотрите на счётчики broadcast).', 'פקודות שימושיות: ‏show spanning-tree, ‏show running-config, ‏show interfaces (להסתכל על מוני ה-broadcast).'),
+      T('Verify: ' + a.id + ' pings ' + c.id + ' again; one port in the triangle is BLK.', 'Проверка: ' + a.id + ' снова пингует ' + c.id + '; один порт в треугольнике в BLK.', 'בדיקה: ' + a.id + ' שוב עושה ping ל-' + c.id + '; פורט אחד במשולש במצב BLK.')],
+    table: tri.table,
+    build(topo) {
+      tri.build(topo);
+      for (const id of ids) tCli(topo, id, ['no spanning-tree vlan 1']);
+    },
+    checks: [...ids.map((id) => CHK.stpOn(id, 1)), CHK.ping(a.id, c.id, c.ip)],
+    solution: { cli: Object.fromEntries(ids.map((id) => [id, ['spanning-tree vlan 1']])) },
+    faults: [T('STP was turned off for VLAN 1 on all three switches (no spanning-tree vlan 1). The triangle became a loop without a blocked port, and broadcasts multiplied without end — a broadcast storm.',
+      'На всех трёх коммутаторах для VLAN 1 был выключен STP (no spanning-tree vlan 1). Треугольник стал петлёй без заблокированного порта, и broadcast размножались без конца — широковещательный шторм.',
+      'בשלושת המתגים כובה STP ל-VLAN 1 ‏(no spanning-tree vlan 1). המשולש הפך ללולאה בלי פורט חסום, ושידורי broadcast התרבו בלי סוף — סופת broadcast.')],
+    hints: [T('MAC flapping = the same frame comes in from two directions: a loop.', 'MAC flapping — один и тот же кадр приходит с двух сторон: петля.', 'MAC flapping = אותה מסגרת מגיעה משני כיוונים: לולאה.'),
+      T('"No spanning tree instance exists" on a switch with active ports means STP is off.', '«No spanning tree instance exists» на коммутаторе с работающими портами значит, что STP выключен.', '"No spanning tree instance exists" במתג עם פורטים פעילים אומר ש-STP כבוי.'),
+      T('Turn it back on: spanning-tree vlan 1 (global configuration) on every switch.', 'Включите обратно: spanning-tree vlan 1 (глобальная конфигурация) на каждом коммутаторе.', 'להפעיל מחדש: ‏spanning-tree vlan 1 (תצורה גלובלית) בכל מתג.')],
+  };
+});
+
+taskDef('mst-region', 'stp', 3, (rng) => {
+  const ids = ['S1', 'S2', 'S3'];
+  const base0 = rng.int(2, 8) * 10;
+  const tri = stpTriangle(rng, ids, 'S3', { vlans: [base0, 1, base0] });
+  const name = rng.pick(['CAMPUS', 'HQ', 'REGION1', 'TLV', 'CORE', 'OFFICE']);
+  const rev = rng.int(1, 9);
+  const base = base0;
+  const g1 = [base, base + 10], g2 = [base + 20, base + 30];
+  const all = g1.concat(g2);
+  const map = { 1: g1, 2: g2 };
+  const region = ['spanning-tree mode mst', 'spanning-tree mst configuration', 'name ' + name, 'revision ' + rev, 'instance 1 vlan ' + g1.join(', '), 'instance 2 vlan ' + g2.join(', '), 'exit'];
+  const trunk = all.flatMap((v) => ['vlan ' + v]).concat(['exit', 'interface range GigabitEthernet0/1 - 2', 'switchport mode trunk']);
+  const [pa, , pc] = tri.pcs;
+  return {
+    title: T('Replace PVST+ with MST: one region, two instances', 'Замените PVST+ на MST: один регион, два экземпляра', 'החלפת PVST+ ב-MST: אזור אחד, שני מופעים'),
+    intro: T('PVST+ builds ' + (all.length + 1) + ' separate trees here — one per VLAN. With MST two trees are enough: instance 1 for VLANs ' + g1.join(', ') + ' with S1 as root, instance 2 for VLANs ' + g2.join(', ') + ' with S2 as root. All three switches must be one region "' + name + '", revision ' + rev + '.',
+      'PVST+ строит здесь ' + (all.length + 1) + ' отдельных деревьев — по одному на VLAN. С MST хватит двух: экземпляр 1 для VLAN ' + g1.join(', ') + ' с корнем S1, экземпляр 2 для VLAN ' + g2.join(', ') + ' с корнем S2. Все три коммутатора должны быть одним регионом «' + name + '», ревизия ' + rev + '.',
+      'PVST+ בונה כאן ' + (all.length + 1) + ' עצים נפרדים — אחד לכל VLAN. עם MST מספיקים שניים: מופע 1 ל-VLAN ' + g1.join(', ') + ' עם S1 כ-root, ומופע 2 ל-VLAN ' + g2.join(', ') + ' עם S2 כ-root. שלושת המתגים צריכים להיות אזור אחד "' + name + '", ‏revision ' + rev + '.'),
+    steps: [
+      T('On every switch: spanning-tree mode mst.', 'На каждом коммутаторе: spanning-tree mode mst.', 'בכל מתג: ‏spanning-tree mode mst.'),
+      T('On every switch, in spanning-tree mst configuration: name ' + name + ', revision ' + rev + ', instance 1 vlan ' + g1.join(', ') + ', instance 2 vlan ' + g2.join(', ') + ' — then exit (the changes apply on exit).', 'На каждом коммутаторе в spanning-tree mst configuration: name ' + name + ', revision ' + rev + ', instance 1 vlan ' + g1.join(', ') + ', instance 2 vlan ' + g2.join(', ') + ' — затем exit (изменения применяются при выходе).', 'בכל מתג, ב-spanning-tree mst configuration: ‏name ' + name + ', ‏revision ' + rev + ', ‏instance 1 vlan ' + g1.join(', ') + ', ‏instance 2 vlan ' + g2.join(', ') + ' — ואז exit (השינויים נכנסים לתוקף ביציאה).'),
+      T('S1: root primary for MST instance 1. S2: root primary for MST instance 2.', 'S1: root primary для экземпляра MST 1. S2: root primary для экземпляра MST 2.', 'S1: ‏root primary למופע MST ‏1. ‏S2: ‏root primary למופע MST ‏2.'),
+      T('Verify: show spanning-tree mst configuration is the same on all three; show spanning-tree mst shows the roots.', 'Проверка: show spanning-tree mst configuration одинаковый на всех трёх; show spanning-tree mst показывает корни.', 'בדיקה: ‏show spanning-tree mst configuration זהה בשלושת המתגים; ‏show spanning-tree mst מראה את ה-roots.'),
+    ],
+    table: tri.table,
+    build(topo) {
+      tri.build(topo);
+      for (const id of ids) tCli(topo, id, trunk);
+      for (const p of tri.pcs) if (p.vlan !== 1) tCli(topo, p.sw, ['interface ' + tri.pcPort, 'switchport mode access', 'switchport access vlan ' + p.vlan]);
+    },
+    checks: [...ids.map((id) => CHK.mstRegion(id, name, rev, map)), CHK.mstRoot('S1', 1, g1[0]), CHK.mstRoot('S2', 2, g2[0]), CHK.ping(pa.id, pc.id, pc.ip)],
+    solution: { cli: { S1: region.concat(['spanning-tree mst 1 root primary']), S2: region.concat(['spanning-tree mst 2 root primary']), S3: region } },
+    hints: [T('Name, revision and the VLAN-to-instance table must be exactly the same on all switches — otherwise they are different regions.', 'Имя, ревизия и таблица VLAN → экземпляр должны совпадать на всех коммутаторах до символа — иначе это разные регионы.', 'השם, ה-revision וטבלת VLAN → מופע חייבים להיות זהים בדיוק בכל המתגים — אחרת אלה אזורים שונים.'),
+      T('"show pending" inside spanning-tree mst configuration shows what will apply on exit.', '«show pending» внутри spanning-tree mst configuration показывает, что применится при exit.', '"show pending" בתוך spanning-tree mst configuration מראה מה ייכנס לתוקף ב-exit.'),
+      T('Ports to a switch of another region show "Bound" in show spanning-tree.', 'Порты к коммутатору другого региона в show spanning-tree помечены «Bound».', 'פורטים למתג באזור אחר מסומנים "Bound" ב-show spanning-tree.')],
+  };
+});
+
 // Два коммутатора, два параллельных кабеля, ПК одного VLAN на каждом
 function ecPairSetup(rng) {
   const sp = subnetPool(rng);
@@ -6057,6 +6465,10 @@ function taskBuild(task) {
 }
 
 function taskCheck(topo, task) {
+  return swConverged(topo, () => taskCheckNow(topo, task)); // настройка, а не секунды listening / learning
+}
+
+function taskCheckNow(topo, task) {
   const items = task.checks.map((c) => {
     let r;
     try { r = c.run(topo); } catch (e) { r = { ok: false, hint: T('Check error: ' + e.message, 'Ошибка проверки: ' + e.message, 'שגיאת בדיקה: ' + e.message) }; }
@@ -6108,7 +6520,16 @@ const CMD_NOTES = [
   [/^spanning-tree vlan (\S+) root primary/, (m) => T('Make this switch the root for VLAN ' + m[1] + ': IOS sets priority 24576 (or 4096 below the current root).', 'Сделать этот коммутатор корнем для VLAN ' + m[1] + ': IOS ставит приоритет 24576 (или на 4096 ниже нынешнего корня).', 'להפוך את המתג הזה ל-root של VLAN ' + m[1] + ': ה-IOS קובע priority ‏24576 (או 4096 פחות מה-root הנוכחי).')],
   [/^spanning-tree vlan (\S+) root secondary/, (m) => T('Backup root for VLAN ' + m[1] + ': priority 28672 — it takes over if the root fails.', 'Резервный корень для VLAN ' + m[1] + ': приоритет 28672 — заменит корень, если тот откажет.', 'root גיבוי ל-VLAN ' + m[1] + ': ‏priority ‏28672 — מחליף את ה-root אם הוא נופל.')],
   [/^spanning-tree vlan (\S+) priority (\d+)/, (m) => T('Bridge priority ' + m[2] + ' for VLAN ' + m[1] + ' (a multiple of 4096; the lowest wins).', 'Приоритет моста ' + m[2] + ' для VLAN ' + m[1] + ' (кратен 4096; побеждает наименьший).', 'priority של הגשר ' + m[2] + ' ל-VLAN ' + m[1] + ' (כפולה של 4096; הנמוך מנצח).')],
-  [/^no spanning-tree vlan (\S+)/, (m) => T('Back to the default priority 32768 for VLAN ' + m[1] + '.', 'Вернуть приоритет по умолчанию 32768 для VLAN ' + m[1] + '.', 'חזרה ל-priority ברירת המחדל 32768 ל-VLAN ' + m[1] + '.')],
+  [/^no spanning-tree vlan (\S+)$/, (m) => T('Turns Spanning Tree OFF for VLAN ' + m[1] + ': with redundant links the loop is no longer broken — a broadcast storm.', 'Выключает Spanning Tree для VLAN ' + m[1] + ': при резервных каналах петля больше не разрывается — широковещательный шторм.', 'מכבה את Spanning Tree ל-VLAN ' + m[1] + ': עם קישורים מיותרים הלולאה כבר לא נשברת — סופת broadcast.')],
+  [/^spanning-tree vlan (\S+)$/, (m) => T('Turn Spanning Tree back on for VLAN ' + m[1] + ': it blocks one port of every loop again.', 'Снова включить Spanning Tree для VLAN ' + m[1] + ': он опять блокирует по порту в каждой петле.', 'להפעיל מחדש את Spanning Tree ל-VLAN ' + m[1] + ': הוא שוב חוסם פורט אחד בכל לולאה.')],
+  [/^spanning-tree mode mst/, () => T('MST (802.1s): many VLANs share a few trees (instances); it converges fast like RSTP.', 'MST (802.1s): много VLAN делят несколько деревьев (экземпляров); сходится быстро, как RSTP.', 'MST ‏(802.1s): הרבה VLAN חולקים כמה עצים (מופעים); מתכנס מהר כמו RSTP.')],
+  [/^spanning-tree mst configuration/, () => T('Enter the MST region settings (config-mst); the changes apply on exit.', 'Войти в настройки региона MST (config-mst); изменения применятся при exit.', 'כניסה להגדרות אזור ה-MST ‏(config-mst); השינויים נכנסים לתוקף ב-exit.')],
+  [/^spanning-tree mst (\d+) root primary/, (m) => T('Make this switch the root of MST instance ' + m[1] + ' (priority 24576 or 4096 below the current root).', 'Сделать этот коммутатор корнем экземпляра MST ' + m[1] + ' (приоритет 24576 или на 4096 ниже нынешнего корня).', 'להפוך את המתג הזה ל-root של מופע MST ' + m[1] + ' ‏(priority ‏24576 או 4096 פחות מה-root הנוכחי).')],
+  [/^spanning-tree mst (\d+) root secondary/, (m) => T('Backup root of MST instance ' + m[1] + ' (priority 28672).', 'Резервный корень экземпляра MST ' + m[1] + ' (приоритет 28672).', 'root גיבוי של מופע MST ' + m[1] + ' ‏(priority ‏28672).')],
+  [/^spanning-tree mst (\d+) priority (\d+)/, (m) => T('Priority ' + m[2] + ' for MST instance ' + m[1] + ' (a multiple of 4096).', 'Приоритет ' + m[2] + ' для экземпляра MST ' + m[1] + ' (кратен 4096).', 'priority ' + m[2] + ' למופע MST ' + m[1] + ' (כפולה של 4096).')],
+  [/^revision (\d+)/, (m) => T('Region revision ' + m[1] + ' — the same number on every switch of the region.', 'Ревизия региона ' + m[1] + ' — одинаковая на всех коммутаторах региона.', 'revision ' + m[1] + ' של האזור — אותו מספר בכל מתגי האזור.')],
+  [/^instance (\d+) vlan (.+)/, (m) => T('MST instance ' + m[1] + ' carries VLANs ' + m[2] + ' — they share one tree.', 'Экземпляр MST ' + m[1] + ' несёт VLAN ' + m[2] + ' — у них одно дерево на всех.', 'מופע MST ' + m[1] + ' נושא את ה-VLAN ' + m[2] + ' — יש להם עץ אחד משותף.')],
+  [/^no spanning-tree vlan (\S+) (priority|root)/, (m) => T('Back to the default priority 32768 for VLAN ' + m[1] + '.', 'Вернуть приоритет по умолчанию 32768 для VLAN ' + m[1] + '.', 'חזרה ל-priority ברירת המחדל 32768 ל-VLAN ' + m[1] + '.')],
   [/^spanning-tree mode rapid-pvst/, () => T('Rapid PVST+ (802.1w): a separate fast spanning tree for every VLAN.', 'Rapid PVST+ (802.1w): отдельное быстрое дерево для каждого VLAN.', 'Rapid PVST+ ‏(802.1w): עץ מהיר נפרד לכל VLAN.')],
   [/^spanning-tree portfast bpduguard default/, () => T('BPDU Guard on every PortFast port of this switch.', 'BPDU Guard на всех портах этого коммутатора с PortFast.', 'BPDU Guard בכל הפורטים עם PortFast במתג הזה.')],
   [/^spanning-tree portfast/, () => T('PortFast: a port to a PC goes straight to forwarding — no 30-second wait.', 'PortFast: порт к ПК сразу начинает передавать — без ожидания 30 секунд.', 'PortFast: פורט למחשב עובר מיד להעברה — בלי המתנה של 30 שניות.')],
@@ -6181,13 +6602,31 @@ const CMD_NOTES = [
   [/^ip ssh version 2/, () => T('Use the more secure SSH version 2.', 'Использовать более надёжный SSH версии 2.', 'שימוש ב-SSH גרסה 2 המאובטחת יותר.')],
   [/^copy running-config startup-config/, () => T('Save the configuration to NVRAM so it survives a reboot.', 'Сохранить конфигурацию в NVRAM, чтобы она пережила перезагрузку.', 'שמירת התצורה ב-NVRAM כדי שתישאר אחרי אתחול.')],
 ];
-function cmdNote(line) {
-  for (const [re, f] of CMD_NOTES) { const m = line.trim().match(re); if (m) return f(m); }
+// ctx — строка режима, в котором стоит команда (interface …, spanning-tree mst configuration …): «name» в регионе MST — не имя VLAN
+const MST_NOTES = [
+  [/^name (\S+)/, (m) => T('Region name "' + m[1] + '" — must be exactly the same (case too) on every switch of the region.', 'Имя региона «' + m[1] + '» — должно совпадать на всех коммутаторах региона, вплоть до регистра.', 'שם האזור "' + m[1] + '" — חייב להיות זהה בדיוק (גם באותיות) בכל מתגי האזור.')],
+  [/^exit$/, () => T('Leave the MST settings — now the changes apply.', 'Выйти из настроек MST — теперь изменения вступают в силу.', 'יציאה מהגדרות ה-MST — עכשיו השינויים נכנסים לתוקף.')],
+];
+function cmdNote(line, ctx) {
+  const list = ctx && /^spanning-tree mst configuration/.test(ctx) ? MST_NOTES.concat(CMD_NOTES) : CMD_NOTES;
+  for (const [re, f] of list) { const m = line.trim().match(re); if (m) return f(m); }
   return null;
+}
+// Пояснения к строкам по порядку, с учётом режима (подрежим заканчивается на exit / end)
+function cmdNotes(lines) {
+  let ctx = null;
+  return lines.map((c) => {
+    const note = cmdNote(c, ctx);
+    if (SUBMODE_RE.test(c)) ctx = c; else if (c === 'exit' || c === 'end') ctx = null;
+    return note;
+  });
 }
 
 // ---------- Почему это важно (по типу проверки) ----------
 const CHK_INFO = {
+  stpOn: ['srwe05', 'Without STP the switches do not break loops: a broadcast goes round and multiplies until links and CPUs are saturated — a broadcast storm. MAC addresses "flap" between ports and nothing works.', 'Без STP коммутаторы не разрывают петли: broadcast ходит по кругу и размножается, пока каналы и процессоры не захлебнутся, — широковещательный шторм. MAC-адреса «прыгают» между портами, и ничего не работает.', 'בלי STP המתגים לא שוברים לולאות: ‏broadcast מסתובב ומתרבה עד שהקישורים והמעבדים מוצפים — סופת broadcast. כתובות MAC "קופצות" בין פורטים ושום דבר לא עובד.'],
+  mstRegion: ['srwe05', 'MST switches form one region only if the region name, the revision and the whole VLAN-to-instance table are identical. Otherwise each is its own region and the instances stop at the boundary.', 'Коммутаторы MST образуют один регион, только если имя региона, ревизия и вся таблица VLAN → экземпляр совпадают. Иначе каждый — отдельный регион, и экземпляры обрываются на границе.', 'מתגי MST יוצרים אזור אחד רק אם שם האזור, ה-revision וכל טבלת VLAN → מופע זהים. אחרת כל אחד הוא אזור נפרד והמופעים נעצרים בגבול.'],
+  mstRoot: ['srwe05', 'Every MST instance has its own root, chosen by the priority of that instance (spanning-tree mst <n> priority / root primary). It works only inside one region.', 'У каждого экземпляра MST свой корень, его выбирает приоритет этого экземпляра (spanning-tree mst <n> priority / root primary). Работает только внутри одного региона.', 'לכל מופע MST יש root משלו, שנבחר לפי ה-priority של המופע (spanning-tree mst <n> priority / root primary). זה עובד רק בתוך אזור אחד.'],
   stpRoot: ['srwe05', 'The root bridge is the switch with the lowest Bridge ID = priority + MAC. With the default priority 32768 everywhere, the oldest switch with the lowest MAC wins — usually not the one you want. Give the core switch a lower priority.', 'Корневой мост — коммутатор с наименьшим Bridge ID = приоритет + MAC. Если у всех приоритет по умолчанию 32768, побеждает самый старый коммутатор с наименьшим MAC — обычно не тот, что нужен. Дайте коммутатору ядра меньший приоритет.', 'ה-root bridge הוא המתג עם ה-Bridge ID הנמוך ביותר = ‏priority + ‏MAC. כשלכולם priority ברירת מחדל 32768, מנצח המתג הישן עם ה-MAC הנמוך — בדרך כלל לא זה שרוצים. נותנים למתג הליבה priority נמוך יותר.'],
   stpBackup: ['srwe05', 'If the root fails, the switch with the next lowest Bridge ID becomes root. Choose it yourself (root secondary = 28672), otherwise chance picks it.', 'Если корень откажет, корнем станет коммутатор со следующим по величине Bridge ID. Выберите его сами (root secondary = 28672), иначе его выберет случай.', 'אם ה-root נופל, המתג עם ה-Bridge ID הבא בגודלו הופך ל-root. בוחרים אותו בעצמכם (root secondary = 28672), אחרת המקרה יבחר.'],
   portfast: ['srwe05', 'Without PortFast an access port waits about 30 seconds (listening, learning) before it forwards. PortFast skips that — but only on ports to end devices.', 'Без PortFast access-порт ждёт около 30 секунд (listening, learning), прежде чем начать передавать. PortFast это пропускает — но только на портах к конечным устройствам.', 'בלי PortFast פורט access מחכה כ-30 שניות (listening, ‏learning) לפני שהוא מעביר. ‏PortFast מדלג על זה — אבל רק בפורטים להתקני קצה.'],
@@ -6231,6 +6670,9 @@ const fxCli = (dev, lines) => ({ dev, via: 'cli', lines: lines.filter(Boolean) }
 const fxGui = (dev, lines) => ({ dev, via: 'gui', lines: lines.filter(Boolean) });
 const fxSol = (devs, re, fallback) => ({ sol: { devs, re }, fallback });
 const CHK_FIX = {
+  stpOn: (sw, v) => [fxCli(sw, ['spanning-tree vlan ' + v])],
+  mstRegion: (sw, name, rev, map) => [fxCli(sw, ['spanning-tree mode mst', 'spanning-tree mst configuration', 'name ' + name, 'revision ' + rev, ...Object.keys(map).map((i) => 'instance ' + i + ' vlan ' + map[i].join(', ')), 'exit'])],
+  mstRoot: (sw, inst) => [fxCli(sw, ['spanning-tree mst ' + inst + ' root primary'])],
   stpRoot: (sw, v) => [fxCli(sw, ['spanning-tree vlan ' + v + ' root primary'])],
   stpBackup: (sw, root, v) => [fxCli(sw, ['spanning-tree vlan ' + v + ' root secondary'])],
   portfast: (sw, port) => [fxCli(sw, ['interface ' + port, 'spanning-tree portfast'])],
@@ -6277,8 +6719,8 @@ for (const k of Object.keys(CHK)) {
 }
 
 // Строки решения, относящиеся к проверке: блоки «режим + команды внутри» (interface …, router …, vlan …).
-const SUBMODE_RE = /^(interface |vlan \d|router |ip dhcp pool |line )/;
-const CHILD_RE = /^(no )?(channel-group|channel-protocol|spanning-tree|ip address|shutdown|description|switchport|encapsulation|ip helper-address|name |network |default-router|dns-server|version|auto-summary|passive-interface|router-id|default-information|password|login|transport|exec-timeout|ipv6 address|ip ospf|bandwidth|duplex|speed|lease)/;
+const SUBMODE_RE = /^(interface |vlan \d|router |ip dhcp pool |line |spanning-tree mst configuration)/;
+const CHILD_RE = /^(no )?(revision|instance |channel-group|channel-protocol|spanning-tree|ip address|shutdown|description|switchport|encapsulation|ip helper-address|name |network |default-router|dns-server|version|auto-summary|passive-interface|router-id|default-information|password|login|transport|exec-timeout|ipv6 address|ip ospf|bandwidth|duplex|speed|lease)/;
 function solExtract(task, devs, re) {
   const out = [];
   for (const [dev, cmds] of Object.entries((task.solution && task.solution.cli) || {})) {
@@ -6328,7 +6770,7 @@ function checkDetails(check, task, topo) {
   return {
     why: info ? T(info[1], info[2], info[3]) : null,
     lesson: info ? info[0] : null,
-    fix: blocks.map((b) => ({ dev: b.dev, via: b.via, viaLabel: VIA[b.via] || VIA.cli, lines: b.lines.map((l) => (typeof l === 'string' ? { text: l, note: b.via === 'cli' || b.via === 'exec' ? cmdNote(l) : null } : { text: null, note: l })) })),
+    fix: blocks.map((b) => ({ dev: b.dev, via: b.via, viaLabel: VIA[b.via] || VIA.cli, lines: ((notes) => b.lines.map((l, i) => (typeof l === 'string' ? { text: l, note: b.via === 'cli' || b.via === 'exec' ? notes[i] : null } : { text: null, note: l })))(cmdNotes(b.lines.map((l) => (typeof l === 'string' ? l : '')))) })),
   };
 }
 
@@ -6339,6 +6781,7 @@ const CLI_TOPICS = [
   [/ip route/, T('static routes', 'статические маршруты', 'נתיבים סטטיים')],
   [/^(vlan|name |switchport access|switchport mode access)/, T('VLANs and access ports', 'VLAN и access-порты', 'VLAN ופורטי access')],
   [/^switchport (mode trunk|trunk)/, T('trunk', 'trunk', 'trunk')],
+  [/^spanning-tree mst|^spanning-tree mode mst/, T('MST', 'MST', 'MST')],
   [/^spanning-tree/, T('Spanning Tree', 'Spanning Tree', 'Spanning Tree')],
   [/channel-group|^interface port-channel/i, T('EtherChannel', 'EtherChannel', 'EtherChannel')],
   [/dhcp|default-router|dns-server|helper/, T('DHCP', 'DHCP', 'DHCP')],
@@ -6398,7 +6841,7 @@ function taskSolutionSteps(task) {
       kind: 'cli', dev: d,
       title: T(d + ' — CLI: ' + joinT(topics).en, d + ' — CLI: ' + joinT(topics).ru, d + ' — CLI: ' + joinT(topics).he),
       explain: () => T('Click ' + d + ' → CLI. Each line is explained on the right.', 'Кликните ' + d + ' → CLI. Каждая строка объяснена справа.', 'לוחצים על ' + d + ' → CLI. כל שורה מוסברת בצד.'),
-      lines: () => [{ via: 'cli', dev: d, lines: ['enable', 'configure terminal', ...cmds, 'end'].map((c) => ({ text: c, note: cmdNote(c) })) }],
+      lines: () => { const all = ['enable', 'configure terminal', ...cmds, 'end'], notes = cmdNotes(all); return [{ via: 'cli', dev: d, lines: all.map((c, i) => ({ text: c, note: notes[i] })) }]; },
       apply(topo) { iosRunConfig(topo, d, cmds); netCommit(topo); },
     });
   }
@@ -9272,6 +9715,16 @@ lessonDef({
         ['BPDU Guard — if a BPDU arrives on that port (someone plugged in a switch), the port goes err-disabled.', 'BPDU Guard — если на порт пришёл BPDU (кто-то подключил коммутатор), порт переходит в err-disabled.', 'BPDU Guard — אם מגיע BPDU לפורט (מישהו חיבר מתג), הפורט עובר ל-err-disabled.'],
         ['Never enable PortFast on links to other switches.', 'Никогда не включайте PortFast на каналах к другим коммутаторам.', 'אף פעם לא מפעילים PortFast על קישורים למתגים אחרים.'],
       ])),
+    lSec(['MST in brief', 'MST коротко', 'MST בקצרה'],
+      lP(['PVST+ runs one tree per VLAN: 100 VLANs = 100 trees, 100 sets of BPDUs. MST (802.1s) puts many VLANs into a few instances; every instance is one tree. It is built on RSTP, so it converges just as fast.', 'PVST+ строит по дереву на каждый VLAN: 100 VLAN — 100 деревьев и 100 потоков BPDU. MST (802.1s) объединяет много VLAN в несколько экземпляров; каждый экземпляр — одно дерево. MST построен на RSTP и сходится так же быстро.', 'PVST+ בונה עץ לכל VLAN: ‏100 VLAN = ‏100 עצים ו-100 זרמי BPDU. ‏MST ‏(802.1s) מאגד הרבה VLAN לכמה מופעים; כל מופע הוא עץ אחד. הוא בנוי על RSTP ולכן מתכנס באותה מהירות.']),
+      lCode('S1(config)# spanning-tree mode mst\nS1(config)# spanning-tree mst configuration\nS1(config-mst)# name CAMPUS\nS1(config-mst)# revision 1\nS1(config-mst)# instance 1 vlan 10, 20\nS1(config-mst)# instance 2 vlan 30, 40\nS1(config-mst)# exit            ! the changes apply here\nS1(config)# spanning-tree mst 1 root primary\n\nS1# show spanning-tree mst configuration\nS1# show spanning-tree mst',
+        ['Every switch of the region gets the same name, revision and VLAN table.', 'На каждом коммутаторе региона — одинаковые имя, ревизия и таблица VLAN.', 'בכל מתג באזור — אותו שם, אותו revision ואותה טבלת VLAN.']),
+      lUL([
+        ['A region = switches with the same name, revision and VLAN-to-instance table. One difference and they are different regions; the instances stop at the boundary (show spanning-tree marks the port "Bound").', 'Регион — коммутаторы с одинаковыми именем, ревизией и таблицей VLAN → экземпляр. Одно отличие — и это разные регионы; экземпляры обрываются на границе (в show spanning-tree порт помечен «Bound»).', 'אזור = מתגים עם אותו שם, אותו revision ואותה טבלת VLAN → מופע. הבדל אחד — והם אזורים שונים; המופעים נעצרים בגבול (ב-show spanning-tree הפורט מסומן "Bound").'],
+        ['Instance 0 (IST) carries every VLAN not mapped elsewhere and talks to the outside world.', 'Экземпляр 0 (IST) несёт все VLAN, не привязанные к другим, и общается с внешним миром.', 'מופע 0 ‏(IST) נושא את כל ה-VLAN שלא מופו למופע אחר ומדבר עם העולם שבחוץ.'],
+        ['MST uses long path costs: 1 Gbit/s = 20000, 100 Mbit/s = 200000.', 'MST использует длинные стоимости: 1 Гбит/с = 20000, 100 Мбит/с = 200000.', 'MST משתמש בעלויות ארוכות: ‏1 Gbit/s = ‏20000, ‏100 Mbit/s = ‏200000.'],
+      ]),
+      lTip(['Try it in NetTrainer: build a triangle of switches and watch show spanning-tree — one port is "Altn BLK" and its LED is amber. Plug in a PC: the port spends 15 s in LIS and 15 s in LRN (the ⏩ Fast Forward Time button skips 30 s), with PortFast it forwards at once. "no spanning-tree vlan 1" on all switches of a loop = a broadcast storm.', 'Попробуйте в NetTrainer: соберите треугольник из коммутаторов и посмотрите show spanning-tree — один порт «Altn BLK», его индикатор оранжевый. Подключите ПК: порт 15 с в LIS и 15 с в LRN (кнопка ⏩ Fast Forward Time пропускает 30 с), с PortFast — передаёт сразу. «no spanning-tree vlan 1» на всех коммутаторах петли — широковещательный шторм.', 'נסו ב-NetTrainer: בונים משולש של מתגים ומסתכלים ב-show spanning-tree — פורט אחד "Altn BLK" והנורה שלו כתומה. מחברים מחשב: הפורט נמצא 15 שניות ב-LIS ו-15 ב-LRN (הכפתור ⏩ Fast Forward Time מדלג על 30 שניות), ועם PortFast הוא מעביר מיד. ‏"no spanning-tree vlan 1" בכל מתגי הלולאה = סופת broadcast.'])),
   ],
   quiz: [
     lQ(['What happens to a broadcast in a switched loop without STP?', 'Что происходит с broadcast в петле коммутаторов без STP?', 'מה קורה ל-broadcast בלולאה של מתגים בלי STP?'], [['It loops forever and causes a broadcast storm', 'Ходит по кругу бесконечно и вызывает широковещательный шторм', 'הוא מסתובב לנצח וגורם לסופת broadcast'], ['Its TTL expires and it is dropped', 'Истекает TTL, и он отбрасывается', 'ה-TTL שלו פג והוא נזרק'], ['The switch sends it to the router', 'Коммутатор отправит его маршрутизатору', 'המתג שולח אותו לנתב'], ['Nothing — switches detect loops by themselves', 'Ничего — коммутаторы сами находят петли', 'כלום — מתגים מזהים לולאות בעצמם']], 0,
@@ -9292,6 +9745,12 @@ lessonDef({
       ['BPDU Guard protects edge ports from unexpected switches.', 'BPDU Guard защищает пограничные порты от неожиданных коммутаторов.', 'BPDU Guard מגן על פורטי קצה ממתגים לא צפויים.']),
     lQ(['Which standard is Rapid Spanning Tree?', 'Какой стандарт — это Rapid Spanning Tree?', 'איזה תקן הוא Rapid Spanning Tree?'], ['802.1w', '802.1D', '802.1Q', '802.3ad'], 0,
       ['802.1Q is VLAN tagging, 802.3ad is LACP.', '802.1Q — теги VLAN, 802.3ad — LACP.', '‏802.1Q הוא תיוג VLAN, ‏802.3ad הוא LACP.']),
+    lQ(['Which three things must match for switches to be in one MST region?', 'Какие три вещи должны совпадать, чтобы коммутаторы были в одном регионе MST?', 'אילו שלושה דברים חייבים להיות זהים כדי שמתגים יהיו באותו אזור MST?'], [['Region name, revision number, VLAN-to-instance mapping', 'Имя региона, номер ревизии, таблица VLAN → экземпляр', 'שם האזור, מספר ה-revision, מיפוי VLAN → מופע'], ['Priority, MAC address, hostname', 'Приоритет, MAC-адрес, hostname', 'priority, כתובת MAC, ‏hostname'], ['VTP domain, native VLAN, trunk mode', 'Домен VTP, native VLAN, режим trunk', 'דומיין VTP, ‏native VLAN, מצב trunk'], ['Port cost, port priority, hello timer', 'Стоимость порта, приоритет порта, hello-таймер', 'עלות פורט, priority של פורט, טיימר hello']], 0,
+      ['One difference — and the switches are different regions.', 'Одно отличие — и коммутаторы уже в разных регионах.', 'הבדל אחד — והמתגים כבר באזורים שונים.']),
+    lQ(['A PC is plugged into an access port without PortFast (PVST+). When can it send data?', 'ПК подключили к access-порту без PortFast (PVST+). Когда он сможет передавать данные?', 'מחשב חובר לפורט access בלי PortFast ‏(PVST+). מתי הוא יוכל לשלוח נתונים?'], [['After about 30 s: 15 s listening + 15 s learning', 'Примерно через 30 с: 15 с listening + 15 с learning', 'אחרי כ-30 שניות: ‏15 listening + ‏15 learning'], ['At once', 'Сразу', 'מיד'], ['After 2 s (hello time)', 'Через 2 с (hello)', 'אחרי 2 שניות (hello)'], ['After 300 s (MAC aging)', 'Через 300 с (старение MAC)', 'אחרי 300 שניות (aging של MAC)']], 0,
+      ['Forward delay is 15 s per state. PortFast skips both — that is why user ports get it.', 'Forward delay — 15 с на каждое состояние. PortFast пропускает оба — поэтому его ставят на пользовательские порты.', 'ה-forward delay הוא 15 שניות לכל מצב. ‏PortFast מדלג על שניהם — לכן מפעילים אותו בפורטים של משתמשים.']),
+    lQ(['The console shows "%SW_MATM-4-MACFLAP_NOTIF: Host … is flapping between port Fa0/1 and port Fa0/2". What does it mean?', 'В консоли «%SW_MATM-4-MACFLAP_NOTIF: Host … is flapping between port Fa0/1 and port Fa0/2». Что это значит?', 'בקונסולה "%SW_MATM-4-MACFLAP_NOTIF: Host … is flapping between port Fa0/1 and port Fa0/2". מה זה אומר?'], [['A Layer 2 loop: the same frame comes from two directions', 'Петля 2-го уровня: один и тот же кадр приходит с двух сторон', 'לולאה בשכבה 2: אותה מסגרת מגיעה משני כיוונים'], ['The host has two IP addresses', 'У хоста два IP-адреса', 'למארח יש שתי כתובות IP'], ['A duplex mismatch', 'Несовпадение дуплекса', 'אי-התאמת דופלקס'], ['The MAC table is full', 'Таблица MAC переполнена', 'טבלת ה-MAC מלאה']], 0,
+      ['Typical of a broadcast storm: STP is off or does not reach the loop.', 'Типично для широковещательного шторма: STP выключен или не перекрывает петлю.', 'אופייני לסופת broadcast: ‏STP כבוי או לא מגיע ללולאה.']),
   ],
   gen: [
     function genRootBridge(rng) {
@@ -10257,6 +10716,8 @@ G('srwe05', 'Broadcast storm', 'Широковещательный шторм', 
 G('srwe05', 'RSTP', 'RSTP', 'RSTP', 'Rapid STP (802.1w) — converges in seconds; Cisco runs it per VLAN as Rapid PVST+.', 'Быстрый STP (802.1w) — сходится за секунды; у Cisco работает по VLAN как Rapid PVST+.', 'STP מהיר (802.1w) — מתכנס תוך שניות; ב-Cisco רץ לכל VLAN בתור Rapid PVST+.');
 G('srwe05', 'PortFast', 'PortFast', 'PortFast', 'Puts an access port straight into forwarding, skipping listening and learning.', 'Сразу переводит access-порт в forwarding, минуя listening и learning.', 'מעביר פורט access ישר ל-forwarding בלי listening ו-learning.');
 G('srwe05', 'BPDU Guard', 'BPDU Guard', 'BPDU Guard', 'Err-disables an edge port that receives a BPDU.', 'Переводит пограничный порт в err-disabled при получении BPDU.', 'מעביר פורט קצה ל-err-disabled כשמגיע אליו BPDU.');
+G('srwe05', 'MST region', 'Регион MST', 'אזור MST', 'Switches with the same MST name, revision and VLAN-to-instance table; inside it every instance is one tree.', 'Коммутаторы с одинаковыми именем MST, ревизией и таблицей VLAN → экземпляр; внутри него каждый экземпляр — одно дерево.', 'מתגים עם אותו שם MST, אותו revision ואותה טבלת VLAN → מופע; בתוכו כל מופע הוא עץ אחד.');
+G('srwe05', 'IST (MST instance 0)', 'IST (экземпляр MST 0)', 'IST ‏(מופע MST ‏0)', 'The MST instance for all VLANs not mapped elsewhere; it also connects the region to switches outside it.', 'Экземпляр MST для всех VLAN, не привязанных к другим; он же связывает регион с коммутаторами снаружи.', 'מופע ה-MST לכל ה-VLAN שלא מופו למופע אחר; הוא גם מחבר את האזור למתגים שמחוצה לו.');
 G('srwe06', 'EtherChannel', 'EtherChannel', 'EtherChannel', 'Several physical links bundled into one logical link for bandwidth and redundancy.', 'Несколько физических каналов, объединённых в один логический ради полосы и резервирования.', 'כמה קישורים פיזיים שמאוחדים לקישור לוגי אחד בשביל רוחב פס ויתירות.');
 G('srwe06', 'Port-channel', 'Port-channel', 'Port-channel', 'The logical interface of an EtherChannel; configure it instead of the member ports.', 'Логический интерфейс EtherChannel; настраивают его вместо портов-участников.', 'הממשק הלוגי של EtherChannel; מגדירים אותו במקום את הפורטים החברים.');
 G('srwe06', 'LACP', 'LACP', 'LACP', 'IEEE 802.3ad EtherChannel negotiation; modes active and passive.', 'Согласование EtherChannel по IEEE 802.3ad; режимы active и passive.', 'משא ומתן על EtherChannel לפי IEEE 802.3ad; מצבים active ו-passive.');
@@ -12363,6 +12824,7 @@ const CLI_MODE_INFO = {
   'router-ospf': T('OSPF process (config-router) — router-id, network <address> <wildcard> area <n>, passive-interface.', 'Процесс OSPF (config-router) — router-id, network <адрес> <wildcard> area <n>, passive-interface.', 'תהליך OSPF ‏(config-router) — router-id, ‏network <כתובת> <wildcard> area <n>, ‏passive-interface.'),
   dhcp: T('DHCP pool (dhcp-config) — network, default-router, dns-server.', 'DHCP-пул (dhcp-config) — network, default-router, dns-server.', 'מאגר DHCP ‏(dhcp-config) — network, ‏default-router, ‏dns-server.'),
   line: T('Line configuration (config-line) — password, login, transport input.', 'Настройка линии (config-line) — password, login, transport input.', 'הגדרת קו (config-line) — password, ‏login, ‏transport input.'),
+  mst: T('MST region (config-mst) — name, revision, instance <n> vlan <list>; the changes apply on exit (abort cancels them).', 'Регион MST (config-mst) — name, revision, instance <n> vlan <список>; изменения вступают в силу при exit (abort — отменить).', 'אזור MST ‏(config-mst) — ‏name, ‏revision, ‏instance <n> vlan <רשימה>; השינויים נכנסים לתוקף ב-exit ‏(abort מבטל).'),
   vlan: T('VLAN configuration (config-vlan) — give the VLAN a name, then exit.', 'Настройка VLAN (config-vlan) — задайте имя VLAN и выйдите (exit).', 'הגדרת VLAN ‏(config-vlan) — נותנים שם ל-VLAN ויוצאים (exit).'),
   start: T('Press Enter to start the console session.', 'Нажмите Enter, чтобы начать сеанс консоли.', 'לוחצים Enter כדי להתחיל את חיבור הקונסולה.'),
   pending: T('IOS is waiting for an answer: a password, or Enter to confirm.', 'IOS ждёт ответа: пароль или Enter для подтверждения.', 'IOS מחכה לתשובה: סיסמה, או Enter לאישור.'),
@@ -12380,6 +12842,10 @@ const CLI_MESSAGES = [
   [/already uses (LACP|PAgP|mode on)/, 'err', T('All ports of one channel use one protocol. To change it: "no channel-group" on all its ports, then "channel-group … mode …" again.', 'Все порты одного канала используют один протокол. Чтобы сменить его: «no channel-group» на всех портах, затем снова «channel-group … mode …».', 'כל הפורטים בערוץ אחד משתמשים בפרוטוקול אחד. כדי להחליף: ‏"no channel-group" בכל הפורטים, ואז שוב "channel-group … mode …".')],
   [/Po\d+\(SD\)/, 'err', T('The Port-channel is down. I = the other end does not negotiate (passive + passive, auto + auto, LACP vs PAgP); s = a port is set differently from its Port-channel; D = the port is down.', 'Port-channel не работает. I — другой конец не договаривается (passive + passive, auto + auto, LACP против PAgP); s — порт настроен не так, как его Port-channel; D — порт не работает.', 'ה-Port-channel לא פעיל. ‏I = הצד השני לא מתאם (passive + passive, ‏auto + auto, ‏LACP מול PAgP); ‏s = פורט מוגדר אחרת מה-Port-channel שלו; ‏D = הפורט לא פעיל.')],
   [/Po\d+\(SU\)/, 'ok', T('The EtherChannel is up. (P) ports carry traffic together; STP sees the whole bundle as one port.', 'EtherChannel работает. Порты (P) передают трафик вместе; STP видит весь пучок как один порт.', 'ה-EtherChannel פעיל. פורטים (P) מעבירים תעבורה יחד; ‏STP רואה את כל הצרור כפורט אחד.')],
+  [/%SW_MATM-4-MACFLAP_NOTIF/, 'err', T('A MAC address jumps between two ports: the same frame arrives from two directions. That is a Layer 2 loop that STP does not break — a broadcast storm. Check show spanning-tree; if STP was turned off, turn it on: spanning-tree vlan <n>.', 'MAC-адрес прыгает между двумя портами: один и тот же кадр приходит с двух сторон. Это петля 2-го уровня, которую STP не разрывает, — широковещательный шторм. Проверьте show spanning-tree; если STP выключен, включите: spanning-tree vlan <n>.', 'כתובת MAC קופצת בין שני פורטים: אותה מסגרת מגיעה משני כיוונים. זו לולאה בשכבה 2 ש-STP לא שובר — סופת broadcast. בודקים show spanning-tree; אם STP כובה, מפעילים: ‏spanning-tree vlan <n>.')],
+  [/No spanning tree instance exists|Spanning tree instance\(s\) for vlan \d+ does not exist/, 'info', T('No STP here for that VLAN: either no port of the VLAN is up, or STP was turned off (look for "no spanning-tree vlan" in running-config).', 'Здесь нет STP для этого VLAN: либо ни один порт VLAN не работает, либо STP выключен (ищите «no spanning-tree vlan» в running-config).', 'אין כאן STP ל-VLAN הזה: או שאין פורט פעיל ב-VLAN, או ש-STP כובה (לחפש "no spanning-tree vlan" ב-running-config).')],
+  [/ (LIS|LRN) /, 'info', T('LIS / LRN — the port is still converging: 15 s listening + 15 s learning, then FWD. No data passes yet. PortFast skips this on ports to PCs; the ⏩ Fast Forward Time button moves time 30 s ahead.', 'LIS / LRN — порт ещё сходится: 15 с listening + 15 с learning, потом FWD. Данные пока не проходят. PortFast пропускает это на портах к ПК; кнопка ⏩ Fast Forward Time сдвигает время на 30 с.', 'LIS / LRN — הפורט עדיין מתכנס: ‏15 שניות listening + ‏15 learning, ואז FWD. נתונים עוד לא עוברים. ‏PortFast מדלג על זה בפורטים למחשבים; הכפתור ⏩ Fast Forward Time מקדם את הזמן ב-30 שניות.')],
+  [/Bound\((RSTP|PVST)\)/, 'info', T('Region boundary: the neighbour is in another MST region (name, revision or VLAN table differ) or runs PVST+. MST instances stop here; instance 0 (IST) carries the tree across.', 'Граница региона: сосед в другом регионе MST (отличаются имя, ревизия или таблица VLAN) или работает в PVST+. Экземпляры MST здесь обрываются; дерево через границу ведёт экземпляр 0 (IST).', 'גבול אזור: השכן באזור MST אחר (השם, ה-revision או טבלת ה-VLAN שונים) או מריץ PVST+. מופעי ה-MST נעצרים כאן; מופע 0 ‏(IST) מעביר את העץ דרך הגבול.')],
   [/Altn BLK/, 'info', T('Altn BLK = STP blocks this port to break a loop. That is normal: it is the backup path if the main one fails.', 'Altn BLK — STP блокирует этот порт, чтобы разорвать петлю. Это нормально: это запасной путь на случай отказа основного.', 'Altn BLK = ‏STP חוסם את הפורט כדי לשבור לולאה. זה תקין: זו הדרך הגיבוי אם הראשית נופלת.')],
   [/This bridge is the root/, 'info', T('This switch is the root bridge of that VLAN: all its ports are designated (FWD).', 'Этот коммутатор — корневой мост этого VLAN: все его порты назначенные (FWD).', 'המתג הזה הוא ה-root bridge של ה-VLAN: כל הפורטים שלו designated ‏(FWD).')],
   [/% Unrecognized host or address/, 'err', T('The router does not know this name. Use the IP address, or add the name to the router\'s own table: "ip host <name> <ip>" (check with "show hosts").', 'Роутер не знает этого имени. Укажите IP-адрес или добавьте имя в собственную таблицу роутера: «ip host <имя> <ip>» (проверка — «show hosts»).', 'הנתב לא מכיר את השם הזה. משתמשים בכתובת ה-IP, או מוסיפים את השם לטבלה של הנתב עצמו: "ip host <name> <ip>" (בודקים עם "show hosts").')],
@@ -13283,6 +13749,7 @@ function loadProject(obj, label) {
   Workspace.selected = null;
   App.projectName = label;
   App.changed();
+  swSettle(App.sandbox); // открытая сеть уже сошлась — без 30 секунд ожидания STP
   setTimeout(() => Workspace.fit(), 30);
   toast('Opened — открыто: ' + label);
 }
@@ -13529,7 +13996,7 @@ const Workspace = {
         const mx = (A.x + B.x) / 2 - g.uy * 30, my = (A.y + B.y) / 2 + g.ux * 30;
         line = svgEl('path', { d: 'M' + A.x + ' ' + A.y + ' Q' + mx + ' ' + my + ' ' + B.x + ' ' + B.y, class: 'link console' });
       } else {
-        line = svgEl('line', { x1: A.x, y1: A.y, x2: B.x, y2: B.y, class: 'link ' + l.cable });
+        line = svgEl('line', { x1: A.x, y1: A.y, x2: B.x, y2: B.y, class: 'link ' + l.cable + (swLinkStorm(topo, l) ? ' storm' : '') });
       }
       L.appendChild(line);
       const hit = line.cloneNode();
@@ -15178,7 +15645,7 @@ const Training = {
     this.example = null;
     if (App.training) for (const [k, w] of DevWin.wins) if (k.startsWith('t|')) w.win.close();
     const topo = taskBuild(task);
-    App.training = { task, topo, result: null };
+    App.training = { task, topo: stpLive(topo), result: null };
     App.undoStacks.training = []; App.redoStacks.training = [];
     App.vp.training = { x: 0, y: 0, z: 1 };
     this.hints = 0;
@@ -17098,10 +17565,12 @@ const DemoUI = {
       DevWin.closeAll();
       restoreTopoInPlace(App.sandbox, this.saved || JSON.stringify(newTopology()));
       _rtMap.delete(App.sandbox);
+      stpLive(App.sandbox);
       Terminal.states.delete(App.sandbox);
       App.changed();
     }
     this.saved = null;
+    if (keep) stpLive(App.sandbox); // демонстрация шла без таймеров STP — дальше сеть живёт как обычно
     App.setMode('realtime');
     this.render();
     if (!keep) { App.setView('learn'); }
@@ -17374,6 +17843,9 @@ const App = {
     if (this.view === 'physical') Physical.render(); else if (this.view !== 'learn') Workspace.render();
     DevWin.refreshAll();
     Sim.renderPduList();
+    clearTimeout(this._stpTimer);
+    const wait = swNextChange(this.topo());
+    if (wait !== null) this._stpTimer = setTimeout(() => this.changed(), wait + 50);
   },
   _saveTimer: null,
   queueSave() {
@@ -17498,6 +17970,16 @@ const App = {
     this.queueRender();
   },
 };
+
+// Живые таймеры STP (listening / learning по 15 с) — для рабочей области и Training; сеть при этом уже сошлась
+function stpLive(topo) {
+  const rt = netRt(topo);
+  rt.stpTimers = true;
+  swSettle(topo);
+  rt.stormPrev = null; // шторм, начавшийся при сборке задания, должен быть виден в консолях коммутаторов
+  swStormLog(topo);
+  return topo;
+}
 
 function restoreTopoInPlace(topo, json) {
   const o = JSON.parse(json);
@@ -17691,7 +18173,7 @@ function buildTimebar() {
   appendKids(tb, [
     h('span', { id: 'simtime' }, 'Time: 00:00:00'),
     h('button', { class: 'round', title: 'Power Cycle Devices (Alt+S) — перезагрузить все устройства', html: iconUse('v-cycle', 26, 26), onclick: () => powerCycleAll() }),
-    h('button', { class: 'round', title: 'Fast Forward Time (Alt+D) — ускорить время, сети сходятся мгновенно', html: iconUse('v-ff', 24, 24), onclick: () => { App.startTime -= 30000; toast('+30 s'); } }),
+    h('button', { class: 'round', title: 'Fast Forward Time (Alt+D) — ускорить время, сети сходятся мгновенно', html: iconUse('v-ff', 24, 24), onclick: () => { App.startTime -= 30000; netAdvance(App.topo(), 30000); App.changed(); toast('+30 s — STP: listening/learning'); } }),
     h('span', { class: 'grow' }),
     h('button', { class: 'mode on', dataset: { mode: 'realtime' }, title: 'Realtime mode (Реальное время)', html: iconUse('v-rt', 26, 26) + '<span>Realtime</span>', onclick: () => App.setMode('realtime') }),
     h('button', { class: 'mode', dataset: { mode: 'simulation' }, title: 'Simulation mode (Пошаговая симуляция пакетов)', html: iconUse('v-sim', 26, 26) + '<span>Simulation</span>', onclick: () => App.setMode('simulation') }),
@@ -17715,6 +18197,7 @@ async function fileNew() {
   DevWin.closeAll();
   restoreTopoInPlace(App.sandbox, JSON.stringify(newTopology()));
   App.changed();
+  swSettle(App.sandbox);
 }
 
 async function powerCycleAll() {
@@ -17827,7 +18310,7 @@ function appInit() {
   buildTimebar();
   // Как в Packet Tracer: каждый запуск — с пустой рабочей области. Прошлая работа — в File → Open → «Last session».
   const prev = Store.get('sandbox', null);
-  App.sandbox = loadTopo(null);
+  App.sandbox = stpLive(loadTopo(null));
   if (prev && prev.devices && Object.keys(prev.devices).length) {
     Projects.put(AUTOSAVE_NAME, prev);
     setTimeout(() => toast('Empty workspace. Your previous work: Open → "' + AUTOSAVE_NAME + '" (прошлая работа — в Open)'), 900);
@@ -17835,7 +18318,7 @@ function appInit() {
   const tr = Store.get('training', null);
   if (tr && tr.templateId) {
     const task = taskCreate(tr.templateId, tr.seed);
-    if (task) App.training = { task, topo: loadTopo(tr.topo), result: null };
+    if (task) App.training = { task, topo: stpLive(loadTopo(tr.topo)), result: null };
   }
   Workspace.init();
   Physical.init();

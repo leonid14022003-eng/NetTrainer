@@ -17,7 +17,7 @@ function triangle(t, macs) {
 const showSw = (t, dev, cmd) => iosRunScript(t, dev, ['en', cmd]).out;
 const blockedPorts = (t, v) => {
   const out = [];
-  for (const [dev, x] of Object.entries(swState(t).stp[v] || {})) for (const [lp, p] of Object.entries(x.ports)) if (p.sts === 'BLK') out.push(dev + ' ' + lp);
+  for (const [dev, x] of Object.entries(swState(t).stp[v] || {})) for (const [lp, p] of Object.entries(x.ports)) if (stpSts(swState(t), p) === "BLK") out.push(dev + ' ' + lp);
   return out;
 };
 
@@ -182,4 +182,104 @@ test('BPDU Guard and PortFast', () => {
   eq(t.devices.S2.cfg.interfaces['FastEthernet0/24'].errdis, 'bpduguard');
   has(showSw(t, 'S2', 'show running-config'), 'spanning-tree portfast bpduguard default');
   has(showSw(t, 'S2', 'show spanning-tree summary'), 'PortFast BPDU Guard Default  is enabled');
+});
+
+test('STP timers: listening 15 s → learning 15 s → forwarding; PortFast and RSTP are immediate', () => {
+  const t = newTopology();
+  netRt(t).stpTimers = true;
+  addDevice(t, '2960', 0, 0, { id: 'S1', name: 'S1' });
+  addDevice(t, 'PC', 0, 0, { id: 'A' }); addDevice(t, 'PC', 0, 0, { id: 'B' });
+  link(t, 'A', 'FastEthernet0', 'S1', 'FastEthernet0/1');
+  pcSet(t, 'A', '10.0.0.1', '255.255.255.0');
+  link(t, 'B', 'FastEthernet0', 'S1', 'FastEthernet0/2');
+  pcSet(t, 'B', '10.0.0.2', '255.255.255.0');
+  const sts = () => stpSts(swState(t), stpPortInfo(t, 'S1', 'FastEthernet0/2', 1));
+  eq(sts(), 'LIS');
+  has(showSw(t, 'S1', 'show spanning-tree'), 'Fa0/2            Desg LIS 19');
+  eq(reach(t, 'A', '10.0.0.2'), 'timeout', 'no forwarding while listening');
+  eq(linkEndState(t, t.links[getPort(t.devices.S1, 'FastEthernet0/2').link], { dev: 'S1', port: 'FastEthernet0/2' }), 'blocked', 'amber LED while converging');
+  ok(swNextChange(t) > 14000 && swNextChange(t) <= 15000, 'next change in ~15 s: ' + swNextChange(t));
+  netAdvance(t, 16000);
+  eq(sts(), 'LRN');
+  eq(reach(t, 'A', '10.0.0.2'), 'timeout', 'learning does not forward either');
+  netAdvance(t, 15000);
+  eq(sts(), 'FWD');
+  eq(reach(t, 'A', '10.0.0.2'), 'reply');
+  eq(swNextChange(t), null);
+  // проверки заданий смотрят на настройку, а не на секунды
+  cli(t, 'S1', ['interface fa0/3']);
+  addDevice(t, 'PC', 0, 0, { id: 'C' }); link(t, 'C', 'FastEthernet0', 'S1', 'FastEthernet0/3'); pcSet(t, 'C', '10.0.0.3', '255.255.255.0');
+  eq(reach(t, 'A', '10.0.0.3'), 'timeout');
+  eq(swConverged(t, () => reach(t, 'A', '10.0.0.3')), 'reply');
+  swSettle(t);
+  eq(reach(t, 'A', '10.0.0.3'), 'reply', 'settled');
+  // PortFast — сразу
+  cli(t, 'S1', ['interface fa0/4', 'spanning-tree portfast']);
+  addDevice(t, 'PC', 0, 0, { id: 'D' }); link(t, 'D', 'FastEthernet0', 'S1', 'FastEthernet0/4'); pcSet(t, 'D', '10.0.0.4', '255.255.255.0');
+  eq(reach(t, 'A', '10.0.0.4'), 'reply', 'PortFast port forwards at once');
+  // Rapid PVST+ между двумя коммутаторами — сразу, а к ПК без PortFast — тоже 30 с
+  addDevice(t, '2960', 0, 0, { id: 'S2', name: 'S2' });
+  cli(t, 'S1', ['spanning-tree mode rapid-pvst']); cli(t, 'S2', ['spanning-tree mode rapid-pvst']);
+  link(t, 'S1', 'GigabitEthernet0/1', 'S2', 'GigabitEthernet0/1');
+  eq(stpSts(swState(t), stpPortInfo(t, 'S1', 'GigabitEthernet0/1', 1)), 'FWD', 'RSTP proposal/agreement');
+  addDevice(t, 'PC', 0, 0, { id: 'E' }); link(t, 'E', 'FastEthernet0', 'S2', 'FastEthernet0/1');
+  eq(stpSts(swState(t), stpPortInfo(t, 'S2', 'FastEthernet0/1', 1)), 'BLK', 'RSTP discarding to a host without PortFast');
+});
+
+test('No STP on a loop = broadcast storm: pings die, MAC flapping, back after spanning-tree vlan', () => {
+  const t = newTopology();
+  triangle(t, ['0002.0000.0002', '0001.0000.0001', '0003.0000.0003']);
+  eq(reach(t, 'P1', '192.168.1.13'), 'reply');
+  let out = '';
+  for (const s of ['S1', 'S2', 'S3']) out += cli(t, s, ['no spanning-tree vlan 1']);
+  eq(swStorm(swState(t), 1).size, 3, 'all three switches are in the storm');
+  has(out, '%SW_MATM-4-MACFLAP_NOTIF');
+  eq(reach(t, 'P1', '192.168.1.13'), 'timeout');
+  eq(reach(t, 'P1', '192.168.1.12'), 'timeout', 'even the direct neighbour is unreachable');
+  has(showSw(t, 'S1', 'show spanning-tree vlan 1'), 'does not exist');
+  has(showSw(t, 'S1', 'show interfaces fa0/1'), 'broadcasts');
+  has(showSw(t, 'S1', 'show running-config'), 'no spanning-tree vlan 1');
+  // петли нет — шторма нет, даже без STP
+  const l = getPort(t.devices.S3, 'FastEthernet0/1').link;
+  removeLink(t, l); netCommit(t);
+  eq(swStorm(swState(t), 1).size, 0, 'a tree without loops does not storm');
+  eq(reach(t, 'P1', '192.168.1.13'), 'reply');
+  link(t, 'S3', 'FastEthernet0/1', 'S1', 'FastEthernet0/2');
+  eq(reach(t, 'P1', '192.168.1.13'), 'timeout', 'loop is back');
+  for (const s of ['S1', 'S2', 'S3']) cli(t, s, ['spanning-tree vlan 1']);
+  eq(swStorm(swState(t), 1).size, 0);
+  eq(reach(t, 'P1', '192.168.1.13'), 'reply', 'STP breaks the loop again');
+});
+
+test('MST: region, instances, per-instance roots, boundary and pending changes', () => {
+  const t = newTopology();
+  triangle(t, ['0002.0000.0002', '0001.0000.0001', '0003.0000.0003']);
+  for (const s of ['S1', 'S2', 'S3']) cli(t, s, ['vlan 10', 'vlan 20', 'vlan 30', 'interface range fa0/1-2', 'switchport mode trunk']);
+  const region = ['spanning-tree mode mst', 'spanning-tree mst configuration', 'name CAMPUS', 'revision 3', 'instance 1 vlan 10, 20', 'instance 2 vlan 30', 'exit'];
+  for (const s of ['S1', 'S2', 'S3']) cli(t, s, region);
+  has(showSw(t, 'S1', 'show spanning-tree mst configuration'), 'Name      [CAMPUS]');
+  has(showSw(t, 'S1', 'show spanning-tree mst configuration'), '1         10,20');
+  has(showSw(t, 'S1', 'show spanning-tree mst configuration'), '0         1-9,11-19,21-29,31-4094');
+  cli(t, 'S1', ['spanning-tree mst 1 root primary']);
+  cli(t, 'S3', ['spanning-tree mst 2 root primary']);
+  eq(stpRootOf(t, 'S2', 10), 'S1'); eq(stpRootOf(t, 'S2', 20), 'S1', 'VLANs of one instance share the tree');
+  eq(stpRootOf(t, 'S2', 30), 'S3');
+  eq(stpRootOf(t, 'S2', 1), 'S2', 'IST (instance 0): default priorities, lowest MAC');
+  const sm = showSw(t, 'S1', 'show spanning-tree');
+  has(sm, 'MST1');
+  has(sm, 'Spanning tree enabled protocol mstp');
+  has(sm, 'Priority    24577');
+  has(showSw(t, 'S2', 'show spanning-tree mst 1'), '##### MST1    vlans mapped:   10,20');
+  eq(stpPortInfo(t, 'S2', 'FastEthernet0/1', 10).cost, 200000, 'MST uses long path costs');
+  has(showSw(t, 'S1', 'show running-config'), 'spanning-tree mst configuration\n name CAMPUS\n revision 3\n instance 1 vlan 10, 20');
+  // другой регион у S3 (ревизия) — граница, экземпляры не действуют, решает IST
+  cli(t, 'S3', ['spanning-tree mst configuration', 'revision 4', 'exit']);
+  eq(stpRootOf(t, 'S2', 30), 'S2', 'MSTI 2 does not cross the region border — CIST decides');
+  has(showSw(t, 'S1', 'show spanning-tree vlan 30'), 'Bound(RSTP)');
+  // abort отменяет, выход глобальной командой — применяет
+  cli(t, 'S3', ['spanning-tree mst configuration', 'revision 3', 'abort']);
+  eq(t.devices.S3.cfg.mst.rev, 4, 'abort discarded the change');
+  cli(t, 'S3', ['spanning-tree mst configuration', 'revision 3', 'hostname S3']);
+  eq(t.devices.S3.cfg.mst.rev, 3, 'leaving the submode with a global command applies the changes');
+  eq(stpRootOf(t, 'S2', 30), 'S3', 'one region again');
 });

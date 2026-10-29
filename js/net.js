@@ -199,6 +199,7 @@ function l2Reach(topo, devId, ifName) {
   // Из коммутатора кадр уходит через каждый логический порт один раз (пучок EtherChannel — через один свой порт),
   // кроме того, через который пришёл, и кроме портов, заблокированных STP в этом VLAN.
   const emitFromSwitch = (sw, vlan, ingressPort, path) => {
+    if (swInStorm(sws, sw, vlan)) return; // широковещательный шторм: в этом VLAN кадры не проходят
     const inLp = ingressPort ? swLogicalPort(sws, sw, ingressPort) : null;
     const used = new Set();
     for (const p of sw.ports) {
@@ -229,7 +230,8 @@ function l2Reach(topo, devId, ifName) {
       if (!lp) continue; // порт пучка приостановлен
       const v = swIngressVlan(topo, D, peer.port, it.tag);
       if (v === null) continue;
-      if (stpBlocks(sws, D, lp, v)) continue; // порт в состоянии BLK кадры не принимает
+      if (stpBlocks(sws, D, lp, v)) continue; // порт не в FWD (BLK, LIS, LRN) кадры не передаёт
+      if (swInStorm(sws, D, v)) continue;
       hop.vlan = v;
       const path = it.path.concat([hop]);
       const svi = 'Vlan' + v;

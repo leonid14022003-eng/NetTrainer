@@ -38,6 +38,9 @@ const App = {
     if (this.view === 'physical') Physical.render(); else if (this.view !== 'learn') Workspace.render();
     DevWin.refreshAll();
     Sim.renderPduList();
+    clearTimeout(this._stpTimer);
+    const wait = swNextChange(this.topo());
+    if (wait !== null) this._stpTimer = setTimeout(() => this.changed(), wait + 50);
   },
   _saveTimer: null,
   queueSave() {
@@ -162,6 +165,16 @@ const App = {
     this.queueRender();
   },
 };
+
+// Живые таймеры STP (listening / learning по 15 с) — для рабочей области и Training; сеть при этом уже сошлась
+function stpLive(topo) {
+  const rt = netRt(topo);
+  rt.stpTimers = true;
+  swSettle(topo);
+  rt.stormPrev = null; // шторм, начавшийся при сборке задания, должен быть виден в консолях коммутаторов
+  swStormLog(topo);
+  return topo;
+}
 
 function restoreTopoInPlace(topo, json) {
   const o = JSON.parse(json);
@@ -355,7 +368,7 @@ function buildTimebar() {
   appendKids(tb, [
     h('span', { id: 'simtime' }, 'Time: 00:00:00'),
     h('button', { class: 'round', title: 'Power Cycle Devices (Alt+S) — перезагрузить все устройства', html: iconUse('v-cycle', 26, 26), onclick: () => powerCycleAll() }),
-    h('button', { class: 'round', title: 'Fast Forward Time (Alt+D) — ускорить время, сети сходятся мгновенно', html: iconUse('v-ff', 24, 24), onclick: () => { App.startTime -= 30000; toast('+30 s'); } }),
+    h('button', { class: 'round', title: 'Fast Forward Time (Alt+D) — ускорить время, сети сходятся мгновенно', html: iconUse('v-ff', 24, 24), onclick: () => { App.startTime -= 30000; netAdvance(App.topo(), 30000); App.changed(); toast('+30 s — STP: listening/learning'); } }),
     h('span', { class: 'grow' }),
     h('button', { class: 'mode on', dataset: { mode: 'realtime' }, title: 'Realtime mode (Реальное время)', html: iconUse('v-rt', 26, 26) + '<span>Realtime</span>', onclick: () => App.setMode('realtime') }),
     h('button', { class: 'mode', dataset: { mode: 'simulation' }, title: 'Simulation mode (Пошаговая симуляция пакетов)', html: iconUse('v-sim', 26, 26) + '<span>Simulation</span>', onclick: () => App.setMode('simulation') }),
@@ -379,6 +392,7 @@ async function fileNew() {
   DevWin.closeAll();
   restoreTopoInPlace(App.sandbox, JSON.stringify(newTopology()));
   App.changed();
+  swSettle(App.sandbox);
 }
 
 async function powerCycleAll() {
@@ -491,7 +505,7 @@ function appInit() {
   buildTimebar();
   // Как в Packet Tracer: каждый запуск — с пустой рабочей области. Прошлая работа — в File → Open → «Last session».
   const prev = Store.get('sandbox', null);
-  App.sandbox = loadTopo(null);
+  App.sandbox = stpLive(loadTopo(null));
   if (prev && prev.devices && Object.keys(prev.devices).length) {
     Projects.put(AUTOSAVE_NAME, prev);
     setTimeout(() => toast('Empty workspace. Your previous work: Open → "' + AUTOSAVE_NAME + '" (прошлая работа — в Open)'), 900);
@@ -499,7 +513,7 @@ function appInit() {
   const tr = Store.get('training', null);
   if (tr && tr.templateId) {
     const task = taskCreate(tr.templateId, tr.seed);
-    if (task) App.training = { task, topo: loadTopo(tr.topo), result: null };
+    if (task) App.training = { task, topo: stpLive(loadTopo(tr.topo)), result: null };
   }
   Workspace.init();
   Physical.init();

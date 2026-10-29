@@ -19,6 +19,7 @@ function loadProject(obj, label) {
   Workspace.selected = null;
   App.projectName = label;
   App.changed();
+  swSettle(App.sandbox); // открытая сеть уже сошлась — без 30 секунд ожидания STP
   setTimeout(() => Workspace.fit(), 30);
   toast('Opened — открыто: ' + label);
 }

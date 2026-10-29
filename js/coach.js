@@ -8,7 +8,16 @@ const CMD_NOTES = [
   [/^spanning-tree vlan (\S+) root primary/, (m) => T('Make this switch the root for VLAN ' + m[1] + ': IOS sets priority 24576 (or 4096 below the current root).', 'Сделать этот коммутатор корнем для VLAN ' + m[1] + ': IOS ставит приоритет 24576 (или на 4096 ниже нынешнего корня).', 'להפוך את המתג הזה ל-root של VLAN ' + m[1] + ': ה-IOS קובע priority ‏24576 (או 4096 פחות מה-root הנוכחי).')],
   [/^spanning-tree vlan (\S+) root secondary/, (m) => T('Backup root for VLAN ' + m[1] + ': priority 28672 — it takes over if the root fails.', 'Резервный корень для VLAN ' + m[1] + ': приоритет 28672 — заменит корень, если тот откажет.', 'root גיבוי ל-VLAN ' + m[1] + ': ‏priority ‏28672 — מחליף את ה-root אם הוא נופל.')],
   [/^spanning-tree vlan (\S+) priority (\d+)/, (m) => T('Bridge priority ' + m[2] + ' for VLAN ' + m[1] + ' (a multiple of 4096; the lowest wins).', 'Приоритет моста ' + m[2] + ' для VLAN ' + m[1] + ' (кратен 4096; побеждает наименьший).', 'priority של הגשר ' + m[2] + ' ל-VLAN ' + m[1] + ' (כפולה של 4096; הנמוך מנצח).')],
-  [/^no spanning-tree vlan (\S+)/, (m) => T('Back to the default priority 32768 for VLAN ' + m[1] + '.', 'Вернуть приоритет по умолчанию 32768 для VLAN ' + m[1] + '.', 'חזרה ל-priority ברירת המחדל 32768 ל-VLAN ' + m[1] + '.')],
+  [/^no spanning-tree vlan (\S+)$/, (m) => T('Turns Spanning Tree OFF for VLAN ' + m[1] + ': with redundant links the loop is no longer broken — a broadcast storm.', 'Выключает Spanning Tree для VLAN ' + m[1] + ': при резервных каналах петля больше не разрывается — широковещательный шторм.', 'מכבה את Spanning Tree ל-VLAN ' + m[1] + ': עם קישורים מיותרים הלולאה כבר לא נשברת — סופת broadcast.')],
+  [/^spanning-tree vlan (\S+)$/, (m) => T('Turn Spanning Tree back on for VLAN ' + m[1] + ': it blocks one port of every loop again.', 'Снова включить Spanning Tree для VLAN ' + m[1] + ': он опять блокирует по порту в каждой петле.', 'להפעיל מחדש את Spanning Tree ל-VLAN ' + m[1] + ': הוא שוב חוסם פורט אחד בכל לולאה.')],
+  [/^spanning-tree mode mst/, () => T('MST (802.1s): many VLANs share a few trees (instances); it converges fast like RSTP.', 'MST (802.1s): много VLAN делят несколько деревьев (экземпляров); сходится быстро, как RSTP.', 'MST ‏(802.1s): הרבה VLAN חולקים כמה עצים (מופעים); מתכנס מהר כמו RSTP.')],
+  [/^spanning-tree mst configuration/, () => T('Enter the MST region settings (config-mst); the changes apply on exit.', 'Войти в настройки региона MST (config-mst); изменения применятся при exit.', 'כניסה להגדרות אזור ה-MST ‏(config-mst); השינויים נכנסים לתוקף ב-exit.')],
+  [/^spanning-tree mst (\d+) root primary/, (m) => T('Make this switch the root of MST instance ' + m[1] + ' (priority 24576 or 4096 below the current root).', 'Сделать этот коммутатор корнем экземпляра MST ' + m[1] + ' (приоритет 24576 или на 4096 ниже нынешнего корня).', 'להפוך את המתג הזה ל-root של מופע MST ' + m[1] + ' ‏(priority ‏24576 או 4096 פחות מה-root הנוכחי).')],
+  [/^spanning-tree mst (\d+) root secondary/, (m) => T('Backup root of MST instance ' + m[1] + ' (priority 28672).', 'Резервный корень экземпляра MST ' + m[1] + ' (приоритет 28672).', 'root גיבוי של מופע MST ' + m[1] + ' ‏(priority ‏28672).')],
+  [/^spanning-tree mst (\d+) priority (\d+)/, (m) => T('Priority ' + m[2] + ' for MST instance ' + m[1] + ' (a multiple of 4096).', 'Приоритет ' + m[2] + ' для экземпляра MST ' + m[1] + ' (кратен 4096).', 'priority ' + m[2] + ' למופע MST ' + m[1] + ' (כפולה של 4096).')],
+  [/^revision (\d+)/, (m) => T('Region revision ' + m[1] + ' — the same number on every switch of the region.', 'Ревизия региона ' + m[1] + ' — одинаковая на всех коммутаторах региона.', 'revision ' + m[1] + ' של האזור — אותו מספר בכל מתגי האזור.')],
+  [/^instance (\d+) vlan (.+)/, (m) => T('MST instance ' + m[1] + ' carries VLANs ' + m[2] + ' — they share one tree.', 'Экземпляр MST ' + m[1] + ' несёт VLAN ' + m[2] + ' — у них одно дерево на всех.', 'מופע MST ' + m[1] + ' נושא את ה-VLAN ' + m[2] + ' — יש להם עץ אחד משותף.')],
+  [/^no spanning-tree vlan (\S+) (priority|root)/, (m) => T('Back to the default priority 32768 for VLAN ' + m[1] + '.', 'Вернуть приоритет по умолчанию 32768 для VLAN ' + m[1] + '.', 'חזרה ל-priority ברירת המחדל 32768 ל-VLAN ' + m[1] + '.')],
   [/^spanning-tree mode rapid-pvst/, () => T('Rapid PVST+ (802.1w): a separate fast spanning tree for every VLAN.', 'Rapid PVST+ (802.1w): отдельное быстрое дерево для каждого VLAN.', 'Rapid PVST+ ‏(802.1w): עץ מהיר נפרד לכל VLAN.')],
   [/^spanning-tree portfast bpduguard default/, () => T('BPDU Guard on every PortFast port of this switch.', 'BPDU Guard на всех портах этого коммутатора с PortFast.', 'BPDU Guard בכל הפורטים עם PortFast במתג הזה.')],
   [/^spanning-tree portfast/, () => T('PortFast: a port to a PC goes straight to forwarding — no 30-second wait.', 'PortFast: порт к ПК сразу начинает передавать — без ожидания 30 секунд.', 'PortFast: פורט למחשב עובר מיד להעברה — בלי המתנה של 30 שניות.')],
@@ -81,13 +90,31 @@ const CMD_NOTES = [
   [/^ip ssh version 2/, () => T('Use the more secure SSH version 2.', 'Использовать более надёжный SSH версии 2.', 'שימוש ב-SSH גרסה 2 המאובטחת יותר.')],
   [/^copy running-config startup-config/, () => T('Save the configuration to NVRAM so it survives a reboot.', 'Сохранить конфигурацию в NVRAM, чтобы она пережила перезагрузку.', 'שמירת התצורה ב-NVRAM כדי שתישאר אחרי אתחול.')],
 ];
-function cmdNote(line) {
-  for (const [re, f] of CMD_NOTES) { const m = line.trim().match(re); if (m) return f(m); }
+// ctx — строка режима, в котором стоит команда (interface …, spanning-tree mst configuration …): «name» в регионе MST — не имя VLAN
+const MST_NOTES = [
+  [/^name (\S+)/, (m) => T('Region name "' + m[1] + '" — must be exactly the same (case too) on every switch of the region.', 'Имя региона «' + m[1] + '» — должно совпадать на всех коммутаторах региона, вплоть до регистра.', 'שם האזור "' + m[1] + '" — חייב להיות זהה בדיוק (גם באותיות) בכל מתגי האזור.')],
+  [/^exit$/, () => T('Leave the MST settings — now the changes apply.', 'Выйти из настроек MST — теперь изменения вступают в силу.', 'יציאה מהגדרות ה-MST — עכשיו השינויים נכנסים לתוקף.')],
+];
+function cmdNote(line, ctx) {
+  const list = ctx && /^spanning-tree mst configuration/.test(ctx) ? MST_NOTES.concat(CMD_NOTES) : CMD_NOTES;
+  for (const [re, f] of list) { const m = line.trim().match(re); if (m) return f(m); }
   return null;
+}
+// Пояснения к строкам по порядку, с учётом режима (подрежим заканчивается на exit / end)
+function cmdNotes(lines) {
+  let ctx = null;
+  return lines.map((c) => {
+    const note = cmdNote(c, ctx);
+    if (SUBMODE_RE.test(c)) ctx = c; else if (c === 'exit' || c === 'end') ctx = null;
+    return note;
+  });
 }
 
 // ---------- Почему это важно (по типу проверки) ----------
 const CHK_INFO = {
+  stpOn: ['srwe05', 'Without STP the switches do not break loops: a broadcast goes round and multiplies until links and CPUs are saturated — a broadcast storm. MAC addresses "flap" between ports and nothing works.', 'Без STP коммутаторы не разрывают петли: broadcast ходит по кругу и размножается, пока каналы и процессоры не захлебнутся, — широковещательный шторм. MAC-адреса «прыгают» между портами, и ничего не работает.', 'בלי STP המתגים לא שוברים לולאות: ‏broadcast מסתובב ומתרבה עד שהקישורים והמעבדים מוצפים — סופת broadcast. כתובות MAC "קופצות" בין פורטים ושום דבר לא עובד.'],
+  mstRegion: ['srwe05', 'MST switches form one region only if the region name, the revision and the whole VLAN-to-instance table are identical. Otherwise each is its own region and the instances stop at the boundary.', 'Коммутаторы MST образуют один регион, только если имя региона, ревизия и вся таблица VLAN → экземпляр совпадают. Иначе каждый — отдельный регион, и экземпляры обрываются на границе.', 'מתגי MST יוצרים אזור אחד רק אם שם האזור, ה-revision וכל טבלת VLAN → מופע זהים. אחרת כל אחד הוא אזור נפרד והמופעים נעצרים בגבול.'],
+  mstRoot: ['srwe05', 'Every MST instance has its own root, chosen by the priority of that instance (spanning-tree mst <n> priority / root primary). It works only inside one region.', 'У каждого экземпляра MST свой корень, его выбирает приоритет этого экземпляра (spanning-tree mst <n> priority / root primary). Работает только внутри одного региона.', 'לכל מופע MST יש root משלו, שנבחר לפי ה-priority של המופע (spanning-tree mst <n> priority / root primary). זה עובד רק בתוך אזור אחד.'],
   stpRoot: ['srwe05', 'The root bridge is the switch with the lowest Bridge ID = priority + MAC. With the default priority 32768 everywhere, the oldest switch with the lowest MAC wins — usually not the one you want. Give the core switch a lower priority.', 'Корневой мост — коммутатор с наименьшим Bridge ID = приоритет + MAC. Если у всех приоритет по умолчанию 32768, побеждает самый старый коммутатор с наименьшим MAC — обычно не тот, что нужен. Дайте коммутатору ядра меньший приоритет.', 'ה-root bridge הוא המתג עם ה-Bridge ID הנמוך ביותר = ‏priority + ‏MAC. כשלכולם priority ברירת מחדל 32768, מנצח המתג הישן עם ה-MAC הנמוך — בדרך כלל לא זה שרוצים. נותנים למתג הליבה priority נמוך יותר.'],
   stpBackup: ['srwe05', 'If the root fails, the switch with the next lowest Bridge ID becomes root. Choose it yourself (root secondary = 28672), otherwise chance picks it.', 'Если корень откажет, корнем станет коммутатор со следующим по величине Bridge ID. Выберите его сами (root secondary = 28672), иначе его выберет случай.', 'אם ה-root נופל, המתג עם ה-Bridge ID הבא בגודלו הופך ל-root. בוחרים אותו בעצמכם (root secondary = 28672), אחרת המקרה יבחר.'],
   portfast: ['srwe05', 'Without PortFast an access port waits about 30 seconds (listening, learning) before it forwards. PortFast skips that — but only on ports to end devices.', 'Без PortFast access-порт ждёт около 30 секунд (listening, learning), прежде чем начать передавать. PortFast это пропускает — но только на портах к конечным устройствам.', 'בלי PortFast פורט access מחכה כ-30 שניות (listening, ‏learning) לפני שהוא מעביר. ‏PortFast מדלג על זה — אבל רק בפורטים להתקני קצה.'],
@@ -131,6 +158,9 @@ const fxCli = (dev, lines) => ({ dev, via: 'cli', lines: lines.filter(Boolean) }
 const fxGui = (dev, lines) => ({ dev, via: 'gui', lines: lines.filter(Boolean) });
 const fxSol = (devs, re, fallback) => ({ sol: { devs, re }, fallback });
 const CHK_FIX = {
+  stpOn: (sw, v) => [fxCli(sw, ['spanning-tree vlan ' + v])],
+  mstRegion: (sw, name, rev, map) => [fxCli(sw, ['spanning-tree mode mst', 'spanning-tree mst configuration', 'name ' + name, 'revision ' + rev, ...Object.keys(map).map((i) => 'instance ' + i + ' vlan ' + map[i].join(', ')), 'exit'])],
+  mstRoot: (sw, inst) => [fxCli(sw, ['spanning-tree mst ' + inst + ' root primary'])],
   stpRoot: (sw, v) => [fxCli(sw, ['spanning-tree vlan ' + v + ' root primary'])],
   stpBackup: (sw, root, v) => [fxCli(sw, ['spanning-tree vlan ' + v + ' root secondary'])],
   portfast: (sw, port) => [fxCli(sw, ['interface ' + port, 'spanning-tree portfast'])],
@@ -177,8 +207,8 @@ for (const k of Object.keys(CHK)) {
 }
 
 // Строки решения, относящиеся к проверке: блоки «режим + команды внутри» (interface …, router …, vlan …).
-const SUBMODE_RE = /^(interface |vlan \d|router |ip dhcp pool |line )/;
-const CHILD_RE = /^(no )?(channel-group|channel-protocol|spanning-tree|ip address|shutdown|description|switchport|encapsulation|ip helper-address|name |network |default-router|dns-server|version|auto-summary|passive-interface|router-id|default-information|password|login|transport|exec-timeout|ipv6 address|ip ospf|bandwidth|duplex|speed|lease)/;
+const SUBMODE_RE = /^(interface |vlan \d|router |ip dhcp pool |line |spanning-tree mst configuration)/;
+const CHILD_RE = /^(no )?(revision|instance |channel-group|channel-protocol|spanning-tree|ip address|shutdown|description|switchport|encapsulation|ip helper-address|name |network |default-router|dns-server|version|auto-summary|passive-interface|router-id|default-information|password|login|transport|exec-timeout|ipv6 address|ip ospf|bandwidth|duplex|speed|lease)/;
 function solExtract(task, devs, re) {
   const out = [];
   for (const [dev, cmds] of Object.entries((task.solution && task.solution.cli) || {})) {
@@ -228,7 +258,7 @@ function checkDetails(check, task, topo) {
   return {
     why: info ? T(info[1], info[2], info[3]) : null,
     lesson: info ? info[0] : null,
-    fix: blocks.map((b) => ({ dev: b.dev, via: b.via, viaLabel: VIA[b.via] || VIA.cli, lines: b.lines.map((l) => (typeof l === 'string' ? { text: l, note: b.via === 'cli' || b.via === 'exec' ? cmdNote(l) : null } : { text: null, note: l })) })),
+    fix: blocks.map((b) => ({ dev: b.dev, via: b.via, viaLabel: VIA[b.via] || VIA.cli, lines: ((notes) => b.lines.map((l, i) => (typeof l === 'string' ? { text: l, note: b.via === 'cli' || b.via === 'exec' ? notes[i] : null } : { text: null, note: l })))(cmdNotes(b.lines.map((l) => (typeof l === 'string' ? l : '')))) })),
   };
 }
 
@@ -239,6 +269,7 @@ const CLI_TOPICS = [
   [/ip route/, T('static routes', 'статические маршруты', 'נתיבים סטטיים')],
   [/^(vlan|name |switchport access|switchport mode access)/, T('VLANs and access ports', 'VLAN и access-порты', 'VLAN ופורטי access')],
   [/^switchport (mode trunk|trunk)/, T('trunk', 'trunk', 'trunk')],
+  [/^spanning-tree mst|^spanning-tree mode mst/, T('MST', 'MST', 'MST')],
   [/^spanning-tree/, T('Spanning Tree', 'Spanning Tree', 'Spanning Tree')],
   [/channel-group|^interface port-channel/i, T('EtherChannel', 'EtherChannel', 'EtherChannel')],
   [/dhcp|default-router|dns-server|helper/, T('DHCP', 'DHCP', 'DHCP')],
@@ -298,7 +329,7 @@ function taskSolutionSteps(task) {
       kind: 'cli', dev: d,
       title: T(d + ' — CLI: ' + joinT(topics).en, d + ' — CLI: ' + joinT(topics).ru, d + ' — CLI: ' + joinT(topics).he),
       explain: () => T('Click ' + d + ' → CLI. Each line is explained on the right.', 'Кликните ' + d + ' → CLI. Каждая строка объяснена справа.', 'לוחצים על ' + d + ' → CLI. כל שורה מוסברת בצד.'),
-      lines: () => [{ via: 'cli', dev: d, lines: ['enable', 'configure terminal', ...cmds, 'end'].map((c) => ({ text: c, note: cmdNote(c) })) }],
+      lines: () => { const all = ['enable', 'configure terminal', ...cmds, 'end'], notes = cmdNotes(all); return [{ via: 'cli', dev: d, lines: all.map((c, i) => ({ text: c, note: notes[i] })) }]; },
       apply(topo) { iosRunConfig(topo, d, cmds); netCommit(topo); },
     });
   }

@@ -463,6 +463,43 @@ const CHK = {
       },
     };
   },
+  stpOn(sw, v) {
+    return {
+      label: T(sw + ': Spanning Tree runs for VLAN ' + v, sw + ': Spanning Tree работает в VLAN ' + v, 'ב-' + sw + ': ‏Spanning Tree פועל ב-VLAN ' + v),
+      run(topo) {
+        return stpOff(topo.devices[sw], v) ? { ok: false, hint: T('STP is turned off for VLAN ' + v + ' (running-config: no spanning-tree vlan ' + v + ').', 'STP выключен для VLAN ' + v + ' (в running-config: no spanning-tree vlan ' + v + ').', 'STP כבוי ל-VLAN ' + v + ' (ב-running-config: ‏no spanning-tree vlan ' + v + ').') } : { ok: true };
+      },
+    };
+  },
+  mstRegion(sw, name, rev, map) {
+    const txt = Object.keys(map).map((i) => i + ' → ' + vlanListStr(map[i])).join(', ');
+    return {
+      label: T(sw + ': MST region "' + name + '", revision ' + rev + ', instances ' + txt, sw + ': регион MST «' + name + '», ревизия ' + rev + ', экземпляры ' + txt, 'ב-' + sw + ': אזור MST ‏"' + name + '", ‏revision ' + rev + ', מופעים ' + txt),
+      run(topo) {
+        const d = topo.devices[sw], m = d.cfg.mst || { name: '', rev: 0, map: {} };
+        if (stpMode(d) !== 'mst') return { ok: false, hint: T('The switch runs ' + stpMode(d) + ', not MST.', 'Коммутатор работает в режиме ' + stpMode(d) + ', а не MST.', 'המתג במצב ' + stpMode(d) + ' ולא MST.') };
+        if (m.name !== name) return { ok: false, hint: T('Region name is "' + (m.name || '') + '" — must be "' + name + '" (case matters).', 'Имя региона «' + (m.name || '') + '» — нужно «' + name + '» (регистр важен).', 'שם האזור "' + (m.name || '') + '" — צריך "' + name + '" (אותיות גדולות וקטנות חשובות).') };
+        if ((m.rev || 0) !== rev) return { ok: false, hint: T('Revision is ' + (m.rev || 0) + ' — must be ' + rev + '.', 'Ревизия ' + (m.rev || 0) + ' — нужна ' + rev + '.', 'ה-revision הוא ' + (m.rev || 0) + ' — צריך ' + rev + '.') };
+        for (const i of Object.keys(map)) {
+          const have = vlanListStr((m.map || {})[i] || []);
+          if (have !== vlanListStr(map[i])) return { ok: false, hint: T('Instance ' + i + ' has VLANs ' + have + ' — must be ' + vlanListStr(map[i]) + '.', 'В экземпляре ' + i + ' VLAN ' + have + ' — нужны ' + vlanListStr(map[i]) + '.', 'במופע ' + i + ' יש VLAN ' + have + ' — צריך ' + vlanListStr(map[i]) + '.') };
+        }
+        return { ok: true };
+      },
+    };
+  },
+  mstRoot(sw, inst, v) {
+    return {
+      label: T(sw + ' is the root of MST instance ' + inst, sw + ' — корень экземпляра MST ' + inst, sw + ' הוא ה-root של מופע MST ' + inst),
+      run(topo) {
+        const r = stpRootOf(topo, sw, v);
+        if (r === sw) return { ok: true };
+        const x = swState(topo).stp[v][sw];
+        const why = x && !x.region ? T(' The switches are not one region yet, so instance ' + inst + ' does not work — instance 0 (IST) decides.', ' Коммутаторы ещё не один регион, поэтому экземпляр ' + inst + ' не действует — решает экземпляр 0 (IST).', ' המתגים עדיין לא אזור אחד, ולכן מופע ' + inst + ' לא פועל — מופע 0 ‏(IST) מחליט.') : T('', '', '');
+        return { ok: false, hint: T('Now the root for VLAN ' + v + ' is ' + r + '.' + why.en, 'Сейчас корень для VLAN ' + v + ' — ' + r + '.' + why.ru, 'עכשיו ה-root של VLAN ' + v + ' הוא ' + r + '.' + why.he) };
+      },
+    };
+  },
   // --- EtherChannel ---
   ecUp(sw, g, count, proto) {
     const pn = (p) => (p === '-' ? 'mode on' : p);
@@ -1030,6 +1067,72 @@ taskDef('stp-edge', 'stp', 1, (rng) => {
   };
 });
 
+taskDef('ts-storm', 'stp', 2, (rng) => {
+  const ids = ['S1', 'S2', 'S3'];
+  const tri = stpTriangle(rng, ids, rng.pick(ids));
+  const [a, , c] = tri.pcs;
+  return {
+    title: T('Troubleshoot: the whole LAN suddenly stopped', 'Неисправность: вся сеть вдруг встала', 'איתור תקלות: כל הרשת נעצרה פתאום'),
+    intro: T('After "a small optimisation" by a colleague nobody can reach anyone: even PCs on neighbouring switches do not ping, and the switch consoles are full of messages. The three switches are cabled in a triangle. Find what was changed and fix it.',
+      'После «небольшой оптимизации» от коллеги никто никого не видит: не пингуются даже ПК на соседних коммутаторах, а консоли коммутаторов забиты сообщениями. Три коммутатора соединены треугольником. Найдите, что изменили, и исправьте.',
+      'אחרי "אופטימיזציה קטנה" של עמית אף אחד לא מגיע לאף אחד: אפילו מחשבים במתגים סמוכים לא עוברים ping, והקונסולות של המתגים מלאות בהודעות. שלושת המתגים מחוברים במשולש. יש למצוא מה שונה ולתקן.'),
+    steps: [T('Open a switch console: what does %SW_MATM-4-MACFLAP_NOTIF tell you?', 'Откройте консоль коммутатора: о чём говорит %SW_MATM-4-MACFLAP_NOTIF?', 'לפתוח קונסולה של מתג: מה אומרת ההודעה %SW_MATM-4-MACFLAP_NOTIF?'),
+      T('Useful commands: show spanning-tree, show running-config, show interfaces (look at the broadcast counters).', 'Полезные команды: show spanning-tree, show running-config, show interfaces (посмотрите на счётчики broadcast).', 'פקודות שימושיות: ‏show spanning-tree, ‏show running-config, ‏show interfaces (להסתכל על מוני ה-broadcast).'),
+      T('Verify: ' + a.id + ' pings ' + c.id + ' again; one port in the triangle is BLK.', 'Проверка: ' + a.id + ' снова пингует ' + c.id + '; один порт в треугольнике в BLK.', 'בדיקה: ' + a.id + ' שוב עושה ping ל-' + c.id + '; פורט אחד במשולש במצב BLK.')],
+    table: tri.table,
+    build(topo) {
+      tri.build(topo);
+      for (const id of ids) tCli(topo, id, ['no spanning-tree vlan 1']);
+    },
+    checks: [...ids.map((id) => CHK.stpOn(id, 1)), CHK.ping(a.id, c.id, c.ip)],
+    solution: { cli: Object.fromEntries(ids.map((id) => [id, ['spanning-tree vlan 1']])) },
+    faults: [T('STP was turned off for VLAN 1 on all three switches (no spanning-tree vlan 1). The triangle became a loop without a blocked port, and broadcasts multiplied without end — a broadcast storm.',
+      'На всех трёх коммутаторах для VLAN 1 был выключен STP (no spanning-tree vlan 1). Треугольник стал петлёй без заблокированного порта, и broadcast размножались без конца — широковещательный шторм.',
+      'בשלושת המתגים כובה STP ל-VLAN 1 ‏(no spanning-tree vlan 1). המשולש הפך ללולאה בלי פורט חסום, ושידורי broadcast התרבו בלי סוף — סופת broadcast.')],
+    hints: [T('MAC flapping = the same frame comes in from two directions: a loop.', 'MAC flapping — один и тот же кадр приходит с двух сторон: петля.', 'MAC flapping = אותה מסגרת מגיעה משני כיוונים: לולאה.'),
+      T('"No spanning tree instance exists" on a switch with active ports means STP is off.', '«No spanning tree instance exists» на коммутаторе с работающими портами значит, что STP выключен.', '"No spanning tree instance exists" במתג עם פורטים פעילים אומר ש-STP כבוי.'),
+      T('Turn it back on: spanning-tree vlan 1 (global configuration) on every switch.', 'Включите обратно: spanning-tree vlan 1 (глобальная конфигурация) на каждом коммутаторе.', 'להפעיל מחדש: ‏spanning-tree vlan 1 (תצורה גלובלית) בכל מתג.')],
+  };
+});
+
+taskDef('mst-region', 'stp', 3, (rng) => {
+  const ids = ['S1', 'S2', 'S3'];
+  const base0 = rng.int(2, 8) * 10;
+  const tri = stpTriangle(rng, ids, 'S3', { vlans: [base0, 1, base0] });
+  const name = rng.pick(['CAMPUS', 'HQ', 'REGION1', 'TLV', 'CORE', 'OFFICE']);
+  const rev = rng.int(1, 9);
+  const base = base0;
+  const g1 = [base, base + 10], g2 = [base + 20, base + 30];
+  const all = g1.concat(g2);
+  const map = { 1: g1, 2: g2 };
+  const region = ['spanning-tree mode mst', 'spanning-tree mst configuration', 'name ' + name, 'revision ' + rev, 'instance 1 vlan ' + g1.join(', '), 'instance 2 vlan ' + g2.join(', '), 'exit'];
+  const trunk = all.flatMap((v) => ['vlan ' + v]).concat(['exit', 'interface range GigabitEthernet0/1 - 2', 'switchport mode trunk']);
+  const [pa, , pc] = tri.pcs;
+  return {
+    title: T('Replace PVST+ with MST: one region, two instances', 'Замените PVST+ на MST: один регион, два экземпляра', 'החלפת PVST+ ב-MST: אזור אחד, שני מופעים'),
+    intro: T('PVST+ builds ' + (all.length + 1) + ' separate trees here — one per VLAN. With MST two trees are enough: instance 1 for VLANs ' + g1.join(', ') + ' with S1 as root, instance 2 for VLANs ' + g2.join(', ') + ' with S2 as root. All three switches must be one region "' + name + '", revision ' + rev + '.',
+      'PVST+ строит здесь ' + (all.length + 1) + ' отдельных деревьев — по одному на VLAN. С MST хватит двух: экземпляр 1 для VLAN ' + g1.join(', ') + ' с корнем S1, экземпляр 2 для VLAN ' + g2.join(', ') + ' с корнем S2. Все три коммутатора должны быть одним регионом «' + name + '», ревизия ' + rev + '.',
+      'PVST+ בונה כאן ' + (all.length + 1) + ' עצים נפרדים — אחד לכל VLAN. עם MST מספיקים שניים: מופע 1 ל-VLAN ' + g1.join(', ') + ' עם S1 כ-root, ומופע 2 ל-VLAN ' + g2.join(', ') + ' עם S2 כ-root. שלושת המתגים צריכים להיות אזור אחד "' + name + '", ‏revision ' + rev + '.'),
+    steps: [
+      T('On every switch: spanning-tree mode mst.', 'На каждом коммутаторе: spanning-tree mode mst.', 'בכל מתג: ‏spanning-tree mode mst.'),
+      T('On every switch, in spanning-tree mst configuration: name ' + name + ', revision ' + rev + ', instance 1 vlan ' + g1.join(', ') + ', instance 2 vlan ' + g2.join(', ') + ' — then exit (the changes apply on exit).', 'На каждом коммутаторе в spanning-tree mst configuration: name ' + name + ', revision ' + rev + ', instance 1 vlan ' + g1.join(', ') + ', instance 2 vlan ' + g2.join(', ') + ' — затем exit (изменения применяются при выходе).', 'בכל מתג, ב-spanning-tree mst configuration: ‏name ' + name + ', ‏revision ' + rev + ', ‏instance 1 vlan ' + g1.join(', ') + ', ‏instance 2 vlan ' + g2.join(', ') + ' — ואז exit (השינויים נכנסים לתוקף ביציאה).'),
+      T('S1: root primary for MST instance 1. S2: root primary for MST instance 2.', 'S1: root primary для экземпляра MST 1. S2: root primary для экземпляра MST 2.', 'S1: ‏root primary למופע MST ‏1. ‏S2: ‏root primary למופע MST ‏2.'),
+      T('Verify: show spanning-tree mst configuration is the same on all three; show spanning-tree mst shows the roots.', 'Проверка: show spanning-tree mst configuration одинаковый на всех трёх; show spanning-tree mst показывает корни.', 'בדיקה: ‏show spanning-tree mst configuration זהה בשלושת המתגים; ‏show spanning-tree mst מראה את ה-roots.'),
+    ],
+    table: tri.table,
+    build(topo) {
+      tri.build(topo);
+      for (const id of ids) tCli(topo, id, trunk);
+      for (const p of tri.pcs) if (p.vlan !== 1) tCli(topo, p.sw, ['interface ' + tri.pcPort, 'switchport mode access', 'switchport access vlan ' + p.vlan]);
+    },
+    checks: [...ids.map((id) => CHK.mstRegion(id, name, rev, map)), CHK.mstRoot('S1', 1, g1[0]), CHK.mstRoot('S2', 2, g2[0]), CHK.ping(pa.id, pc.id, pc.ip)],
+    solution: { cli: { S1: region.concat(['spanning-tree mst 1 root primary']), S2: region.concat(['spanning-tree mst 2 root primary']), S3: region } },
+    hints: [T('Name, revision and the VLAN-to-instance table must be exactly the same on all switches — otherwise they are different regions.', 'Имя, ревизия и таблица VLAN → экземпляр должны совпадать на всех коммутаторах до символа — иначе это разные регионы.', 'השם, ה-revision וטבלת VLAN → מופע חייבים להיות זהים בדיוק בכל המתגים — אחרת אלה אזורים שונים.'),
+      T('"show pending" inside spanning-tree mst configuration shows what will apply on exit.', '«show pending» внутри spanning-tree mst configuration показывает, что применится при exit.', '"show pending" בתוך spanning-tree mst configuration מראה מה ייכנס לתוקף ב-exit.'),
+      T('Ports to a switch of another region show "Bound" in show spanning-tree.', 'Порты к коммутатору другого региона в show spanning-tree помечены «Bound».', 'פורטים למתג באזור אחר מסומנים "Bound" ב-show spanning-tree.')],
+  };
+});
+
 // Два коммутатора, два параллельных кабеля, ПК одного VLAN на каждом
 function ecPairSetup(rng) {
   const sp = subnetPool(rng);
@@ -1584,6 +1687,10 @@ function taskBuild(task) {
 }
 
 function taskCheck(topo, task) {
+  return swConverged(topo, () => taskCheckNow(topo, task)); // настройка, а не секунды listening / learning
+}
+
+function taskCheckNow(topo, task) {
   const items = task.checks.map((c) => {
     let r;
     try { r = c.run(topo); } catch (e) { r = { ok: false, hint: T('Check error: ' + e.message, 'Ошибка проверки: ' + e.message, 'שגיאת בדיקה: ' + e.message) }; }

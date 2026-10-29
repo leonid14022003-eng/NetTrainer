@@ -101,7 +101,7 @@ const Workspace = {
         const mx = (A.x + B.x) / 2 - g.uy * 30, my = (A.y + B.y) / 2 + g.ux * 30;
         line = svgEl('path', { d: 'M' + A.x + ' ' + A.y + ' Q' + mx + ' ' + my + ' ' + B.x + ' ' + B.y, class: 'link console' });
       } else {
-        line = svgEl('line', { x1: A.x, y1: A.y, x2: B.x, y2: B.y, class: 'link ' + l.cable });
+        line = svgEl('line', { x1: A.x, y1: A.y, x2: B.x, y2: B.y, class: 'link ' + l.cable + (swLinkStorm(topo, l) ? ' storm' : '') });
       }
       L.appendChild(line);
       const hit = line.cloneNode();
