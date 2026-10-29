@@ -4,6 +4,27 @@
 
 // ---------- Пояснения к командам IOS ----------
 const CMD_NOTES = [
+  // Spanning Tree и EtherChannel
+  [/^spanning-tree vlan (\S+) root primary/, (m) => T('Make this switch the root for VLAN ' + m[1] + ': IOS sets priority 24576 (or 4096 below the current root).', 'Сделать этот коммутатор корнем для VLAN ' + m[1] + ': IOS ставит приоритет 24576 (или на 4096 ниже нынешнего корня).', 'להפוך את המתג הזה ל-root של VLAN ' + m[1] + ': ה-IOS קובע priority ‏24576 (או 4096 פחות מה-root הנוכחי).')],
+  [/^spanning-tree vlan (\S+) root secondary/, (m) => T('Backup root for VLAN ' + m[1] + ': priority 28672 — it takes over if the root fails.', 'Резервный корень для VLAN ' + m[1] + ': приоритет 28672 — заменит корень, если тот откажет.', 'root גיבוי ל-VLAN ' + m[1] + ': ‏priority ‏28672 — מחליף את ה-root אם הוא נופל.')],
+  [/^spanning-tree vlan (\S+) priority (\d+)/, (m) => T('Bridge priority ' + m[2] + ' for VLAN ' + m[1] + ' (a multiple of 4096; the lowest wins).', 'Приоритет моста ' + m[2] + ' для VLAN ' + m[1] + ' (кратен 4096; побеждает наименьший).', 'priority של הגשר ' + m[2] + ' ל-VLAN ' + m[1] + ' (כפולה של 4096; הנמוך מנצח).')],
+  [/^no spanning-tree vlan (\S+)/, (m) => T('Back to the default priority 32768 for VLAN ' + m[1] + '.', 'Вернуть приоритет по умолчанию 32768 для VLAN ' + m[1] + '.', 'חזרה ל-priority ברירת המחדל 32768 ל-VLAN ' + m[1] + '.')],
+  [/^spanning-tree mode rapid-pvst/, () => T('Rapid PVST+ (802.1w): a separate fast spanning tree for every VLAN.', 'Rapid PVST+ (802.1w): отдельное быстрое дерево для каждого VLAN.', 'Rapid PVST+ ‏(802.1w): עץ מהיר נפרד לכל VLAN.')],
+  [/^spanning-tree portfast bpduguard default/, () => T('BPDU Guard on every PortFast port of this switch.', 'BPDU Guard на всех портах этого коммутатора с PortFast.', 'BPDU Guard בכל הפורטים עם PortFast במתג הזה.')],
+  [/^spanning-tree portfast/, () => T('PortFast: a port to a PC goes straight to forwarding — no 30-second wait.', 'PortFast: порт к ПК сразу начинает передавать — без ожидания 30 секунд.', 'PortFast: פורט למחשב עובר מיד להעברה — בלי המתנה של 30 שניות.')],
+  [/^spanning-tree bpduguard enable/, () => T('BPDU Guard: if a switch is plugged in here, the port goes err-disabled.', 'BPDU Guard: если сюда воткнут коммутатор, порт уйдёт в err-disabled.', 'BPDU Guard: אם מחברים לכאן מתג, הפורט עובר ל-err-disabled.')],
+  [/^no spanning-tree bpduguard/, () => T('Remove BPDU Guard from this port.', 'Убрать BPDU Guard с этого порта.', 'הסרת BPDU Guard מהפורט הזה.')],
+  [/^no spanning-tree portfast/, () => T('Remove PortFast — a port to another switch must not be an edge port.', 'Убрать PortFast — порт к другому коммутатору не должен быть edge-портом.', 'הסרת PortFast — פורט שמחובר למתג אחר לא יכול להיות edge.')],
+  [/^interface port-channel ?(\d+)/i, (m) => T('Logical interface Port-channel' + m[1] + ': its switchport settings are copied to all ports of the bundle.', 'Логический интерфейс Port-channel' + m[1] + ': его настройки switchport переносятся на все порты пучка.', 'הממשק הלוגי Port-channel' + m[1] + ': הגדרות ה-switchport שלו מועתקות לכל הפורטים בצרור.')],
+  [/^channel-group (\d+) mode (\S+)/, (m) => ({
+    active: T('Into EtherChannel ' + m[1] + ' with LACP, starting the negotiation (active).', 'В EtherChannel ' + m[1] + ' по LACP, начинать переговоры самому (active).', 'ל-EtherChannel ' + m[1] + ' עם LACP, ולהתחיל את המשא ומתן (active).'),
+    passive: T('Into EtherChannel ' + m[1] + ' with LACP, only answering (passive): the other side must be active.', 'В EtherChannel ' + m[1] + ' по LACP, только отвечать (passive): другая сторона должна быть active.', 'ל-EtherChannel ' + m[1] + ' עם LACP, רק לענות (passive): הצד השני חייב להיות active.'),
+    desirable: T('Into EtherChannel ' + m[1] + ' with PAgP (Cisco), starting the negotiation (desirable).', 'В EtherChannel ' + m[1] + ' по PAgP (Cisco), начинать переговоры самому (desirable).', 'ל-EtherChannel ' + m[1] + ' עם PAgP ‏(Cisco), ולהתחיל את המשא ומתן (desirable).'),
+    auto: T('Into EtherChannel ' + m[1] + ' with PAgP, only answering (auto): the other side must be desirable.', 'В EtherChannel ' + m[1] + ' по PAgP, только отвечать (auto): другая сторона должна быть desirable.', 'ל-EtherChannel ' + m[1] + ' עם PAgP, רק לענות (auto): הצד השני חייב להיות desirable.'),
+    on: T('Into EtherChannel ' + m[1] + ' without negotiation (on): the other side must be on too.', 'В EtherChannel ' + m[1] + ' без переговоров (on): на другой стороне тоже должен быть on.', 'ל-EtherChannel ' + m[1] + ' בלי משא ומתן (on): גם בצד השני חייב להיות on.'),
+  })[m[2]] || null],
+  [/^no channel-group/, () => T('Take the ports out of their EtherChannel (needed before changing the protocol).', 'Вывести порты из EtherChannel (нужно перед сменой протокола).', 'הוצאת הפורטים מה-EtherChannel (נדרש לפני החלפת פרוטוקול).')],
+  [/^shutdown$/, () => T('Turn the interface off; together with "no shutdown" it also brings an err-disabled port back.', 'Выключить интерфейс; вместе с «no shutdown» это ещё и возвращает порт из err-disabled.', 'כיבוי הממשק; יחד עם "no shutdown" זה גם מחזיר פורט מ-err-disabled.')],
   [/^enable$/, () => T('Enter privileged EXEC mode (#).', 'Перейти в привилегированный режим (#).', 'כניסה למצב privileged EXEC ‏(#).')],
   [/^configure terminal$/, () => T('Enter global configuration mode.', 'Перейти в режим глобальной конфигурации.', 'כניסה למצב תצורה גלובלית.')],
   [/^end$/, () => T('Leave configuration mode, back to #.', 'Выйти из конфигурации обратно в #.', 'יציאה מהתצורה וחזרה ל-#.')],
@@ -67,6 +88,12 @@ function cmdNote(line) {
 
 // ---------- Почему это важно (по типу проверки) ----------
 const CHK_INFO = {
+  stpRoot: ['srwe05', 'The root bridge is the switch with the lowest Bridge ID = priority + MAC. With the default priority 32768 everywhere, the oldest switch with the lowest MAC wins — usually not the one you want. Give the core switch a lower priority.', 'Корневой мост — коммутатор с наименьшим Bridge ID = приоритет + MAC. Если у всех приоритет по умолчанию 32768, побеждает самый старый коммутатор с наименьшим MAC — обычно не тот, что нужен. Дайте коммутатору ядра меньший приоритет.', 'ה-root bridge הוא המתג עם ה-Bridge ID הנמוך ביותר = ‏priority + ‏MAC. כשלכולם priority ברירת מחדל 32768, מנצח המתג הישן עם ה-MAC הנמוך — בדרך כלל לא זה שרוצים. נותנים למתג הליבה priority נמוך יותר.'],
+  stpBackup: ['srwe05', 'If the root fails, the switch with the next lowest Bridge ID becomes root. Choose it yourself (root secondary = 28672), otherwise chance picks it.', 'Если корень откажет, корнем станет коммутатор со следующим по величине Bridge ID. Выберите его сами (root secondary = 28672), иначе его выберет случай.', 'אם ה-root נופל, המתג עם ה-Bridge ID הבא בגודלו הופך ל-root. בוחרים אותו בעצמכם (root secondary = 28672), אחרת המקרה יבחר.'],
+  portfast: ['srwe05', 'Without PortFast an access port waits about 30 seconds (listening, learning) before it forwards. PortFast skips that — but only on ports to end devices.', 'Без PortFast access-порт ждёт около 30 секунд (listening, learning), прежде чем начать передавать. PortFast это пропускает — но только на портах к конечным устройствам.', 'בלי PortFast פורט access מחכה כ-30 שניות (listening, ‏learning) לפני שהוא מעביר. ‏PortFast מדלג על זה — אבל רק בפורטים להתקני קצה.'],
+  bpduguard: ['srwe05', 'BPDU Guard shuts a PortFast port (err-disabled) as soon as a BPDU arrives, i.e. a switch is plugged in. Nobody can create a loop or take over the root from a user port.', 'BPDU Guard выключает порт с PortFast (err-disabled), как только приходит BPDU, то есть подключён коммутатор. Через пользовательский порт нельзя устроить петлю или захватить корень.', 'BPDU Guard מכבה פורט PortFast ‏(err-disabled) ברגע שמגיע BPDU, כלומר חובר מתג. אי אפשר ליצור לולאה או להשתלט על ה-root דרך פורט של משתמש.'],
+  notErrdis: ['srwe05', 'A link to another switch receives BPDUs all the time. With BPDU Guard on it, the uplink goes err-disabled at once. Remove BPDU Guard and PortFast there, then shutdown / no shutdown.', 'Канал к другому коммутатору всё время получает BPDU. С BPDU Guard на нём аплинк сразу уходит в err-disabled. Уберите там BPDU Guard и PortFast, затем shutdown / no shutdown.', 'קישור למתג אחר מקבל BPDU כל הזמן. עם BPDU Guard עליו, ה-uplink עובר מיד ל-err-disabled. מסירים שם את BPDU Guard ואת PortFast, ואז shutdown / no shutdown.'],
+  ecUp: ['srwe06', 'A bundle forms only if both ends agree: the same protocol, compatible modes (LACP: at least one active; PAgP: at least one desirable; on only with on), and every port set like its Port-channel (mode, VLANs, speed).', 'Пучок собирается, только если концы договорились: один протокол, совместимые режимы (LACP — хотя бы один active; PAgP — хотя бы один desirable; on — только с on), и каждый порт настроен как его Port-channel (режим, VLAN, скорость).', 'צרור נוצר רק אם שני הצדדים מסכימים: אותו פרוטוקול, מצבים מתאימים (LACP — לפחות active אחד; ‏PAgP — לפחות desirable אחד; ‏on — רק עם on), וכל פורט מוגדר כמו ה-Port-channel שלו (מצב, ‏VLAN, מהירות).'],
   link: ['itn04', 'Different kinds of devices (PC–switch, switch–router) need a straight-through cable; the same kind (switch–switch, router–router, PC–PC, PC–router) needs cross-over. Use exactly the ports from the task.', 'Разным типам устройств (ПК–коммутатор, коммутатор–роутер) нужен прямой кабель; одинаковым (коммутатор–коммутатор, роутер–роутер, ПК–ПК, ПК–роутер) — перекрёстный. Порты — строго те, что в задании.', 'סוגי התקנים שונים (מחשב–מתג, מתג–נתב) צריכים כבל ישר; אותו סוג (מתג–מתג, נתב–נתב, מחשב–מחשב, מחשב–נתב) צריך כבל מוצלב. משתמשים בדיוק בפורטים שבמשימה.'],
   ifIp: ['itn10', 'Each router interface is the gateway of its own network, so it needs an address from that subnet with the right mask.', 'Каждый интерфейс роутера — шлюз своей сети, поэтому ему нужен адрес из этой подсети с правильной маской.', 'כל ממשק של נתב הוא השער של הרשת שלו, ולכן הוא צריך כתובת מתוך תת-הרשת הזו עם המסכה הנכונה.'],
   ifUp: ['itn10', 'Router interfaces stay administratively down until "no shutdown". A down interface forwards nothing.', 'Интерфейсы роутера выключены, пока не введена «no shutdown». Выключенный интерфейс ничего не передаёт.', 'ממשקי נתב כבויים עד "no shutdown". ממשק כבוי לא מעביר כלום.'],
@@ -104,6 +131,13 @@ const fxCli = (dev, lines) => ({ dev, via: 'cli', lines: lines.filter(Boolean) }
 const fxGui = (dev, lines) => ({ dev, via: 'gui', lines: lines.filter(Boolean) });
 const fxSol = (devs, re, fallback) => ({ sol: { devs, re }, fallback });
 const CHK_FIX = {
+  stpRoot: (sw, v) => [fxCli(sw, ['spanning-tree vlan ' + v + ' root primary'])],
+  stpBackup: (sw, root, v) => [fxCli(sw, ['spanning-tree vlan ' + v + ' root secondary'])],
+  portfast: (sw, port) => [fxCli(sw, ['interface ' + port, 'spanning-tree portfast'])],
+  bpduguard: (sw, port) => [fxCli(sw, ['interface ' + port, 'spanning-tree bpduguard enable'])],
+  notErrdis: (sw, port) => [fxCli(sw, ['interface ' + port, 'no spanning-tree bpduguard', 'no spanning-tree portfast', 'shutdown', 'no shutdown'])],
+  ecUp: (sw, g, count, proto) => [fxSol(null, /channel-group|^interface port-channel|^interface range|switchport mode/,
+    fxCli(sw, ['channel-group ' + g + ' mode ' + (proto === 'LACP' ? 'active' : proto === 'PAgP' ? 'desirable' : 'on')]))],
   link: (a, ap, b, bp) => [{ cable: [a, ap, b, bp] }],
   ifIp: (dev, ifn, ip, mask) => [fxCli(dev, ['interface ' + ifn, 'ip address ' + ip + ' ' + mask, 'no shutdown'])],
   ifUp: (dev, ifn) => [fxCli(dev, ['interface ' + ifn, 'no shutdown'])],
@@ -144,7 +178,7 @@ for (const k of Object.keys(CHK)) {
 
 // Строки решения, относящиеся к проверке: блоки «режим + команды внутри» (interface …, router …, vlan …).
 const SUBMODE_RE = /^(interface |vlan \d|router |ip dhcp pool |line )/;
-const CHILD_RE = /^(no )?(ip address|shutdown|description|switchport|encapsulation|ip helper-address|name |network |default-router|dns-server|version|auto-summary|passive-interface|router-id|default-information|password|login|transport|exec-timeout|ipv6 address|ip ospf|bandwidth|duplex|speed|lease)/;
+const CHILD_RE = /^(no )?(channel-group|channel-protocol|spanning-tree|ip address|shutdown|description|switchport|encapsulation|ip helper-address|name |network |default-router|dns-server|version|auto-summary|passive-interface|router-id|default-information|password|login|transport|exec-timeout|ipv6 address|ip ospf|bandwidth|duplex|speed|lease)/;
 function solExtract(task, devs, re) {
   const out = [];
   for (const [dev, cmds] of Object.entries((task.solution && task.solution.cli) || {})) {
@@ -205,6 +239,8 @@ const CLI_TOPICS = [
   [/ip route/, T('static routes', 'статические маршруты', 'נתיבים סטטיים')],
   [/^(vlan|name |switchport access|switchport mode access)/, T('VLANs and access ports', 'VLAN и access-порты', 'VLAN ופורטי access')],
   [/^switchport (mode trunk|trunk)/, T('trunk', 'trunk', 'trunk')],
+  [/^spanning-tree/, T('Spanning Tree', 'Spanning Tree', 'Spanning Tree')],
+  [/channel-group|^interface port-channel/i, T('EtherChannel', 'EtherChannel', 'EtherChannel')],
   [/dhcp|default-router|dns-server|helper/, T('DHCP', 'DHCP', 'DHCP')],
   [/^router ospf|area|router-id/, T('OSPF', 'OSPF', 'OSPF')],
   [/^router rip|^version|auto-summary/, T('RIP', 'RIP', 'RIP')],

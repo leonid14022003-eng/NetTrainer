@@ -516,9 +516,10 @@ function iosInvalidHere(c) {
   return ' '.repeat(prompt.length) + '^\n% Invalid input detected at \'^\' marker.';
 }
 
+// Порты коммутатора для switchport / spanning-tree: физические и Port-channel
 function iosSwPorts(c) {
   const list = iosIfaces(c);
-  if (list.some((x) => ifKind(x.name) !== 'phys')) { c.out(iosInvalidHere(c)); return null; }
+  if (list.some((x) => ifKind(x.name) !== 'phys' && ifKind(x.name) !== 'po')) { c.out(iosInvalidHere(c)); return null; }
   return list;
 }
 
@@ -781,7 +782,9 @@ iosDef(['config'], 'crypto key generate rsa general-keys modulus <num>', (c) => 
   c.cfg.rsaBits = c.p[0];
   c.out('% Generating ' + c.p[0] + ' bit RSA keys, keys will be non-exportable...[OK]');
 });
-iosDef(['config'], 'spanning-tree mode <word>', (c) => { c.cfg.stpMode = c.p[0]; });
+iosDef(['config'], 'spanning-tree mode pvst', (c) => { c.cfg.stpMode = 'pvst'; }, { dev: 'switch' });
+iosDef(['config'], 'spanning-tree mode rapid-pvst', (c) => { c.cfg.stpMode = 'rapid-pvst'; }, { dev: 'switch' });
+iosDef(['config'], 'spanning-tree mode mst', (c) => { c.out('% NetTrainer: MST is not simulated — use pvst or rapid-pvst.'); }, { dev: 'switch' });
 iosDef(['config'], 'cdp run', (c) => { c.cfg.cdp = true; });
 iosDef(['config'], 'no cdp run', (c) => { c.cfg.cdp = false; });
 
@@ -815,7 +818,11 @@ iosDef(['config'], 'interface <if>', (c) => {
     }
   } else {
     if (k === 'sub' || k === 'loop') { c.out(iosInvalidHere(c)); return; }
-    if (k === 'svi') {
+    if (k === 'po') {
+      const g = poGroup(name);
+      if (g < 1 || g > 64) { c.out(iosInvalidHere(c)); return; }
+      if (!ics[name]) ics[name] = ecNewPo(c.dev, null);
+    } else if (k === 'svi') {
       const v = Number(name.slice(4));
       if (v < 1 || v > 4094) { c.out(iosInvalidHere(c)); return; }
       if (!ics[name]) ics[name] = { ip: null, mask: null, shutdown: true, description: '' };
@@ -834,6 +841,7 @@ iosDef(['config'], 'no interface <if>', (c) => {
   const n = c.p[0];
   const k = ifKind(n);
   if (!c.cfg.interfaces[n] || k === 'phys' || n === 'Vlan1') { c.out(iosInvalidHere(c)); return; }
+  if (k === 'po') for (const m of ecMembers(c.dev, poGroup(n))) delete c.cfg.interfaces[m].channel; // как в IOS: порты выходят из пучка
   delete c.cfg.interfaces[n];
 });
 
@@ -942,8 +950,15 @@ iosDef(IFM, 'ip address <ip> <mask>', (c) => {
 iosDef(IFM, 'no ip address', (c) => { const l = iosRequireL3If(c); if (l) for (const { ic } of l) { ic.ip = null; ic.mask = null; } });
 // DHCP-клиент на интерфейсе роутера (ip address dhcp) пока не моделируется — говорим об этом прямо
 iosDef(IFM, 'ip address dhcp', (c) => { c.out('% NetTrainer: the DHCP client on router interfaces is not simulated yet.\n% Use a static address here: ip address <ip> <mask>'); }, { dev: 'router' });
-iosDef(IFM, 'shutdown', (c) => { for (const { ic } of iosIfaces(c)) ic.shutdown = true; });
-iosDef(IFM, 'no shutdown', (c) => { for (const { ic } of iosIfaces(c)) ic.shutdown = false; });
+// shutdown / no shutdown ещё и возвращают порт из err-disabled (на Port-channel — все его порты)
+function iosClearErrdis(c) {
+  for (const { name, ic } of iosIfaces(c)) {
+    delete ic.errdis;
+    if (ifKind(name) === 'po') for (const m of ecMembers(c.dev, poGroup(name))) delete c.cfg.interfaces[m].errdis;
+  }
+}
+iosDef(IFM, 'shutdown', (c) => { iosClearErrdis(c); for (const { ic } of iosIfaces(c)) ic.shutdown = true; });
+iosDef(IFM, 'no shutdown', (c) => { iosClearErrdis(c); for (const { ic } of iosIfaces(c)) ic.shutdown = false; });
 iosDef(IFM, 'description <line>', (c) => { for (const { ic } of iosIfaces(c)) ic.description = c.p[0]; });
 iosDef(IFM, 'no description', (c) => { for (const { ic } of iosIfaces(c)) ic.description = ''; });
 iosDef(IFM, 'duplex <word>', () => {});
@@ -972,7 +987,7 @@ iosDef(['subif'], 'encapsulation dot1Q <num> native', (c) => {
 }, { dev: 'router' });
 
 // switchport
-const SWP = (pattern, fn) => iosDef(['if', 'range'], pattern, (c) => { const l = iosSwPorts(c); if (l) fn(c, l); }, { dev: 'switch' });
+const SWP = (pattern, fn) => iosDef(['if', 'range'], pattern, (c) => { const l = iosSwPorts(c); if (l) { fn(c, l); ecSyncMembers(c.dev, l); } }, { dev: 'switch' });
 SWP('switchport mode access', (c, l) => l.forEach(({ ic }) => { ic.mode = 'access'; }));
 SWP('switchport mode trunk', (c, l) => l.forEach(({ ic }) => { ic.mode = 'trunk'; }));
 SWP('switchport mode dynamic auto', (c, l) => l.forEach(({ ic }) => { ic.mode = 'dynamic auto'; }));
@@ -1285,9 +1300,14 @@ function iosShowInterface(topo, dev, n) {
   const ic = dev.cfg.interfaces[n];
   const s = ifStatus(topo, dev, n);
   const mac = ifMac(dev, n);
-  const hw = n.startsWith('Gigabit') ? 'CN Gigabit Ethernet' : n.startsWith('Fast') ? 'Lance' : n.startsWith('Vlan') ? 'CPU Interface' : n.startsWith('Loopback') ? 'Loopback' : 'Ethernet';
-  const lines = [n + ' is ' + s.status + ', line protocol is ' + s.protocol + (s.protocol === 'up' && ifKind(n) === 'phys' ? ' (connected)' : '')];
+  const hw = n.startsWith('Gigabit') ? 'CN Gigabit Ethernet' : n.startsWith('Fast') ? 'Lance' : n.startsWith('Vlan') ? 'CPU Interface' : n.startsWith('Loopback') ? 'Loopback' : ifKind(n) === 'po' ? 'EtherChannel' : 'Ethernet';
+  const lines = [n + ' is ' + s.status + ', line protocol is ' + s.protocol + (s.errdis ? ' (err-disabled)' : s.protocol === 'up' && ifKind(n) === 'phys' ? ' (connected)' : '')];
   lines.push('  Hardware is ' + hw + ', address is ' + mac.toLowerCase() + ' (bia ' + mac.toLowerCase() + ')');
+  if (ifKind(n) === 'po') {
+    const G = ecGroupState(topo, dev, poGroup(n));
+    const inPo = G ? Object.keys(G.flags).filter((m) => G.flags[m] === 'P') : [];
+    lines.push('  Members in this channel: ' + (inPo.length ? inPo.map(ifShort).join(' ') : '(none)'));
+  }
   if (ic.description) lines.push('  Description: ' + ic.description);
   if (ic.ip) lines.push('  Internet address is ' + ic.ip + '/' + maskToLen(ic.mask));
   const bw = n.startsWith('Gigabit') ? 1000000 : n.startsWith('Fast') ? 100000 : n.startsWith('Loopback') ? 8000000 : 100000;
@@ -1300,12 +1320,12 @@ function iosShowInterface(topo, dev, n) {
 
 function iosShowSwitchport(topo, dev, n) {
   const ic = dev.cfg.interfaces[n];
-  if (!ic || ifKind(n) !== 'phys') return '% Invalid interface';
-  const oper = swOperMode(topo, dev, n);
+  if (!ic || (ifKind(n) !== 'phys' && ifKind(n) !== 'po')) return '% Invalid interface';
+  const oper = swOperMode(topo, dev, swRepPort(topo, dev, n));
   const admin = ic.mode === 'access' ? 'static access' : ic.mode === 'trunk' ? 'trunk' : ic.mode;
   return [
     'Name: ' + ifShort(n), 'Switchport: Enabled', 'Administrative Mode: ' + admin,
-    'Operational Mode: ' + (portPhysUp(topo, dev.id, n) ? (oper === 'access' ? 'static access' : 'trunk') : 'down'),
+    'Operational Mode: ' + (ifUp(topo, dev, n) ? (oper === 'access' ? 'static access' : 'trunk') : 'down'),
     'Administrative Trunking Encapsulation: dot1q', 'Operational Trunking Encapsulation: ' + (oper === 'trunk' ? 'dot1q' : 'native'),
     'Negotiation of Trunking: ' + (ic.nonegotiate || ic.mode === 'access' ? 'Off' : 'On'),
     'Access Mode VLAN: ' + ic.accessVlan + ' (' + ((dev.cfg.vlans[ic.accessVlan] || {}).name || 'Inactive') + ')',
@@ -1321,10 +1341,12 @@ function iosShowVlanBrief(topo, dev) {
   const dflt = { 1002: 'fddi-default', 1003: 'token-ring-default', 1004: 'fddinet-default', 1005: 'trnet-default' };
   for (const v of all) {
     const name = dflt[v] || dev.cfg.vlans[v].name;
-    const ports = dev.ports.filter((p) => {
+    // порты пучка в списке заменяет их Port-channel, как в IOS
+    const sws = swState(topo);
+    const ports = [...new Set(dev.ports.filter((p) => {
       const ic = dev.cfg.interfaces[p.name];
       return ic && swOperMode(topo, dev, p.name) === 'access' && ic.accessVlan === v;
-    }).map((p) => ifShort(p.name));
+    }).map((p) => swLogicalPort(sws, dev, p.name) || p.name))].map(ifShort);
     const chunks = [];
     for (let i = 0; i < ports.length; i += 4) chunks.push(ports.slice(i, i + 4).join(', '));
     lines.push(padR(v, 5) + padR(name, 33) + padR('active', 10) + (chunks[0] || ''));
@@ -1334,7 +1356,10 @@ function iosShowVlanBrief(topo, dev) {
 }
 
 function iosShowTrunk(topo, dev) {
-  const trunks = dev.ports.filter((p) => portPhysUp(topo, dev.id, p.name) && swOperMode(topo, dev, p.name) === 'trunk');
+  // логические порты: пучок EtherChannel показывается одной строкой Po<N>
+  const sws = swState(topo);
+  const trunks = [...new Set(dev.ports.filter((p) => portPhysUp(topo, dev.id, p.name) && swOperMode(topo, dev, p.name) === 'trunk')
+    .map((p) => swLogicalPort(sws, dev, p.name)).filter(Boolean))].map((name) => ({ name }));
   if (!trunks.length) return '';
   const lines = ['Port        Mode         Encapsulation  Status        Native vlan'];
   for (const p of trunks) {
@@ -1353,7 +1378,8 @@ function iosShowTrunk(topo, dev) {
   lines.push('', 'Port        Vlans in spanning tree forwarding state and not pruned');
   for (const p of trunks) {
     const ic = dev.cfg.interfaces[p.name];
-    lines.push(padR(ifShort(p.name), 12) + vlanListStr(active.filter((v) => vlanAllowed(ic, v)).sort((a, b) => a - b)));
+    const fwd = active.filter((v) => vlanAllowed(ic, v) && !stpBlocks(sws, dev, p.name, v)).sort((a, b) => a - b);
+    lines.push(padR(ifShort(p.name), 12) + (fwd.length ? vlanListStr(fwd) : 'none'));
   }
   return lines.join('\n');
 }
@@ -1446,12 +1472,16 @@ function iosRunningConfig(topo, dev, cfg, isStartup) {
   if ((cfg.nameServers || []).length) L.push('ip name-server ' + cfg.nameServers.join(' '));
   if (cfg.domainLookup === false) L.push('no ip domain-lookup');
   if (cfg.sshVersion) L.push('ip ssh version ' + cfg.sshVersion);
-  L.push('!', 'spanning-tree mode ' + (cfg.stpMode || 'pvst'), '!');
+  L.push('!', 'spanning-tree mode ' + (cfg.stpMode || 'pvst'));
+  if (dev.type === 'switch') L.push(...swRunningGlobal(cfg));
+  L.push('!');
   if (dev.type === 'switch') {
-    for (const p of dev.ports) {
-      const ic = cfg.interfaces[p.name];
+    // как в IOS: сначала Port-channel, потом физические порты
+    const pos = Object.keys(cfg.interfaces).filter((n) => ifKind(n) === 'po').sort((a, b) => poGroup(a) - poGroup(b));
+    for (const n of pos.concat(dev.ports.map((p) => p.name))) {
+      const ic = cfg.interfaces[n];
       if (!ic) continue;
-      L.push('interface ' + p.name);
+      L.push('interface ' + n);
       if (ic.description) L.push(' description ' + ic.description);
       if (ic.accessVlan !== 1) L.push(' switchport access vlan ' + ic.accessVlan);
       if (ic.nativeVlan !== 1) L.push(' switchport trunk native vlan ' + ic.nativeVlan);
@@ -1461,6 +1491,7 @@ function iosRunningConfig(topo, dev, cfg, isStartup) {
       if (ic.mode === 'dynamic desirable') L.push(' switchport mode dynamic desirable');
       if (ic.nonegotiate) L.push(' switchport nonegotiate');
       if (ic.portfast) L.push(' spanning-tree portfast');
+      L.push(...swRunningIf(ic));
       if (ic.shutdown) L.push(' shutdown');
       L.push('!');
     }

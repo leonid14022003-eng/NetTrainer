@@ -178,7 +178,7 @@ lessonDef({
 
 // ---------------------------------------------------------------
 lessonDef({
-  id: 'srwe05', topic: null, drill: 'l2', minutes: 18, genInQuiz: 2,
+  id: 'srwe05', topic: 'stp', drill: 'l2', minutes: 18, genInQuiz: 2,
   title: T('STP Concepts', 'Принципы STP', 'עקרונות STP'),
   goal: T('Why Layer 2 loops are dangerous, how STP elects the root bridge, port roles and costs, port states and timers, RSTP, PortFast and BPDU Guard.',
     'Чем опасны петли 2-го уровня, как STP выбирает корневой мост, роли и стоимости портов, состояния и таймеры, RSTP, PortFast и BPDU Guard.',
@@ -308,7 +308,7 @@ lessonDef({
 const EC_LACP = ['active', 'passive'], EC_PAGP = ['desirable', 'auto'];
 
 lessonDef({
-  id: 'srwe06', topic: null, drill: 'l2', minutes: 14,
+  id: 'srwe06', topic: 'etherchannel', drill: 'l2', minutes: 14,
   title: T('EtherChannel', 'EtherChannel', 'EtherChannel'),
   goal: T('Bundling links into one logical port-channel, PAgP and LACP modes, configuration rules, verification and typical problems.',
     'Объединение каналов в один логический port-channel, режимы PAgP и LACP, правила настройки, проверка и типичные проблемы.',

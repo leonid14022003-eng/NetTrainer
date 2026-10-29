@@ -17,6 +17,7 @@ function netRt(topo) {
 function ifKind(name) {
   if (name.startsWith('Vlan')) return 'svi';
   if (name.startsWith('Loopback')) return 'loop';
+  if (name.startsWith('Port-channel')) return 'po';
   if (name.includes('.')) return 'sub';
   return 'phys';
 }
@@ -40,6 +41,7 @@ function ifMac(dev, name) {
   if (dev.type === 'pc') return dev.ports[0].mac;
   const k = ifKind(name);
   if (k === 'svi' || k === 'loop') return dev.ports[0].mac.slice(0, 10) + 'A0' + (name.length % 10) + '1';
+  if (k === 'po') { const m = ecMembers(dev, poGroup(name))[0]; return m ? getPort(dev, m).mac : dev.ports[0].mac; }
   const p = getPort(dev, parentPort(name));
   return p ? p.mac : '0000.0000.0000';
 }
@@ -114,6 +116,8 @@ function ifStatus(topo, dev, name) {
   if (!ic) return { status: 'deleted', protocol: 'down' };
   const k = ifKind(name);
   if (ic.shutdown) return { status: 'administratively down', protocol: 'down' };
+  if (ic.errdis) return { status: 'down', protocol: 'down', errdis: ic.errdis };
+  if (k === 'po') { const up = ecPoUp(topo, dev, name); return { status: up ? 'up' : 'down', protocol: up ? 'up' : 'down' }; }
   if (k === 'phys') {
     const up = portPhysUp(topo, dev.id, name);
     return { status: up ? 'up' : 'down', protocol: up ? 'up' : 'down' };
@@ -191,10 +195,19 @@ function l2Reach(topo, devId, ifName) {
   const results = [];
   const visited = new Set();
   const queue = [];
+  const sws = swState(topo); // EtherChannel и STP
+  // Из коммутатора кадр уходит через каждый логический порт один раз (пучок EtherChannel — через один свой порт),
+  // кроме того, через который пришёл, и кроме портов, заблокированных STP в этом VLAN.
   const emitFromSwitch = (sw, vlan, ingressPort, path) => {
+    const inLp = ingressPort ? swLogicalPort(sws, sw, ingressPort) : null;
+    const used = new Set();
     for (const p of sw.ports) {
       if (p.name === ingressPort) continue;
       if (!portPhysUp(topo, sw.id, p.name)) continue;
+      const lp = swLogicalPort(sws, sw, p.name);
+      if (!lp || lp === inLp || used.has(lp)) continue;
+      used.add(lp);
+      if (stpBlocks(sws, sw, lp, vlan)) continue;
       const tag = swEgressTag(topo, sw, p.name, vlan);
       if (tag === undefined) continue;
       queue.push({ dev: sw.id, port: p.name, tag, path });
@@ -212,8 +225,11 @@ function l2Reach(topo, devId, ifName) {
     const D = topo.devices[peer.dev];
     const hop = { link: peer.link.id, from: it.dev, to: peer.dev, fromPort: it.port, toPort: peer.port, tag: it.tag };
     if (D.type === 'switch') {
+      const lp = swLogicalPort(sws, D, peer.port);
+      if (!lp) continue; // порт пучка приостановлен
       const v = swIngressVlan(topo, D, peer.port, it.tag);
       if (v === null) continue;
+      if (stpBlocks(sws, D, lp, v)) continue; // порт в состоянии BLK кадры не принимает
       hop.vlan = v;
       const path = it.path.concat([hop]);
       const svi = 'Vlan' + v;
@@ -949,6 +965,7 @@ function pushConsole(topo, devId, text) {
 function netCommit(topo) {
   touch(topo);
   const rt = netRt(topo);
+  swGuards(topo); // BPDU Guard и EtherChannel guard выключают порты до DHCP и сообщений о линках
   // ПК в режиме DHCP без адреса пытаются получить его снова
   for (const d of Object.values(topo.devices)) {
     if (d.type === 'pc' && d.cfg.ipMode === 'dhcp' && !hasValidLease(d) && d.cfg.dhcpStatus !== 'released') {

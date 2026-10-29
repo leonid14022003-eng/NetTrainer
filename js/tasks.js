@@ -7,6 +7,8 @@ const TASK_TOPICS = [
   { id: 'static', title: T('Static routing', 'Статическая маршрутизация', 'ניתוב סטטי') },
   { id: 'vlan', title: T('VLAN & trunk', 'VLAN и trunk', 'VLAN ו-trunk') },
   { id: 'intervlan', title: T('Inter-VLAN routing', 'Маршрутизация между VLAN', 'ניתוב בין VLAN') },
+  { id: 'stp', title: T('Spanning Tree (STP)', 'Spanning Tree (STP)', 'Spanning Tree ‏(STP)') },
+  { id: 'etherchannel', title: T('EtherChannel', 'EtherChannel', 'EtherChannel') },
   { id: 'dhcp', title: T('DHCP', 'DHCP', 'DHCP') },
   { id: 'rip', title: T('RIP', 'RIP', 'RIP') },
   { id: 'ospf', title: T('OSPF', 'OSPF', 'OSPF') },
@@ -218,8 +220,11 @@ const CHK = {
       label: T(sw + ' ' + sh(port) + ' is trunking', sw + ' ' + sh(port) + ' работает как trunk', sh(port) + ' של ' + sw + ' עובד כ-trunk'),
       run(topo) {
         const d = topo.devices[sw];
-        if (!portPhysUp(topo, sw, port)) return { ok: false, hint: T('The link on this port is down.', 'Линк на этом порту не поднят.', 'הקישור בפורט הזה לא פעיל.') };
-        return swOperMode(topo, d, port) === 'trunk' ? { ok: true } : { ok: false, hint: T('Use "switchport mode trunk".', 'Нужна команда "switchport mode trunk".', 'צריך את הפקודה "switchport mode trunk".') };
+        if (ifKind(port) === 'po') {
+          if (!d.cfg.interfaces[port]) return { ok: false, hint: T(port + ' does not exist yet — it appears with "channel-group".', port + ' пока нет — он появится после «channel-group».', port + ' עדיין לא קיים — הוא נוצר עם "channel-group".') };
+          if (!ifUp(topo, d, port)) return { ok: false, hint: T(port + ' is down: no ports are bundled yet.', port + ' не работает: в пучке пока нет портов.', port + ' לא פעיל: עדיין אין פורטים בצרור.') };
+        } else if (!portPhysUp(topo, sw, port)) return { ok: false, hint: T('The link on this port is down.', 'Линк на этом порту не поднят.', 'הקישור בפורט הזה לא פעיל.') };
+        return swOperMode(topo, d, swRepPort(topo, d, port)) === 'trunk' ? { ok: true } : { ok: false, hint: T('Use "switchport mode trunk".', 'Нужна команда "switchport mode trunk".', 'צריך את הפקודה "switchport mode trunk".') };
       },
     };
   },
@@ -396,7 +401,98 @@ const CHK = {
       },
     };
   },
+  // --- Spanning Tree ---
+  stpRoot(sw, v) {
+    return {
+      label: T(sw + ' is the root bridge for VLAN ' + v, sw + ' — корневой мост (root bridge) для VLAN ' + v, sw + ' הוא ה-root bridge של VLAN ' + v),
+      run(topo) {
+        const r = stpRootOf(topo, sw, v);
+        if (r === sw) return { ok: true };
+        if (!r) return { ok: false, hint: T('VLAN ' + v + ' has no working ports on ' + sw + '.', 'На ' + sw + ' нет работающих портов в VLAN ' + v + '.', 'ב-' + sw + ' אין פורטים פעילים ב-VLAN ' + v + '.') };
+        const R = topo.devices[r], me = topo.devices[sw];
+        const now = 'priority ' + (stpPrio(R, v) + v) + ', MAC ' + swBaseMac(R), mine = stpPrio(me, v) + v;
+        return { ok: false, hint: T('The root now is ' + r + ' (' + now + '); ' + sw + ' has priority ' + mine + '.', 'Сейчас корень — ' + r + ' (' + now + '); у ' + sw + ' приоритет ' + mine + '.',
+          'ה-root עכשיו הוא ' + r + ' (' + now + '); ל-' + sw + ' יש priority ' + mine + '.') };
+      },
+    };
+  },
+  // Если корень откажет, корнем станет sw: у него наименьший Bridge ID среди остальных
+  stpBackup(sw, root, v) {
+    return {
+      label: T(sw + ' is the backup root for VLAN ' + v + ' (takes over if ' + root + ' fails)', sw + ' — резервный корень для VLAN ' + v + ' (заменит ' + root + ' при отказе)',
+        sw + ' הוא ה-root הגיבוי של VLAN ' + v + ' (מחליף את ' + root + ' אם הוא נופל)'),
+      run(topo) {
+        let best = null;
+        for (const d of Object.values(topo.devices)) if (d.type === 'switch' && d.id !== root && d.cfg.vlans[v] && (!best || bidLess(stpBid(d, v), stpBid(best, v)))) best = d;
+        if (best && best.id === sw) return { ok: true };
+        const b = best ? best.id + ' (priority ' + (stpPrio(best, v) + v) + ')' : '—';
+        return { ok: false, hint: T('If ' + root + ' failed, the new root would be ' + b + '. ' + sw + ' needs a lower priority than the others.', 'Если ' + root + ' откажет, корнем станет ' + b + '. ' + sw + ' нужен приоритет ниже, чем у остальных.',
+          'אם ' + root + ' ייפול, ה-root החדש יהיה ' + b + '. ‏' + sw + ' צריך priority נמוך יותר משל האחרים.') };
+      },
+    };
+  },
+  portfast(sw, port) {
+    return {
+      label: T(sw + ' ' + sh(port) + ': PortFast is on', sw + ' ' + sh(port) + ': PortFast включён', sh(port) + ' של ' + sw + ': ‏PortFast פעיל'),
+      run(topo) {
+        const d = topo.devices[sw], ic = d.cfg.interfaces[port];
+        if (ic.portfast || (d.cfg.portfastDefault && swOperMode(topo, d, port) === 'access')) return { ok: true };
+        return { ok: false, hint: T('Not enabled on this port yet.', 'На этом порту пока не включён.', 'עדיין לא הופעל בפורט הזה.') };
+      },
+    };
+  },
+  bpduguard(sw, port) {
+    return {
+      label: T(sw + ' ' + sh(port) + ': BPDU Guard is on', sw + ' ' + sh(port) + ': BPDU Guard включён', sh(port) + ' של ' + sw + ': ‏BPDU Guard פעיל'),
+      run(topo) {
+        const d = topo.devices[sw];
+        return swBpduGuardOn(d, d.cfg.interfaces[port], port, topo) ? { ok: true }
+          : { ok: false, hint: T('Not enabled on this port yet.', 'На этом порту пока не включён.', 'עדיין לא הופעל בפורט הזה.') };
+      },
+    };
+  },
+  notErrdis(sw, port, peer) {
+    return {
+      label: T(sw + ' ' + sh(port) + ' (uplink to ' + peer + ') stays up — no PortFast or BPDU Guard on it', sw + ' ' + sh(port) + ' (к ' + peer + ') работает — без PortFast и BPDU Guard',
+        sh(port) + ' של ' + sw + ' (אל ' + peer + ') נשאר פעיל — בלי PortFast ובלי BPDU Guard'),
+      run(topo) {
+        const d = topo.devices[sw], ic = d.cfg.interfaces[port];
+        if (ic.errdis) return { ok: false, hint: T('The port is err-disabled by BPDU Guard: a switch is on the other end.', 'Порт выключен защитой BPDU Guard (err-disabled): на другом конце коммутатор.', 'הפורט כובה על ידי BPDU Guard ‏(err-disabled): בצד השני יש מתג.') };
+        if (ic.portfast) return { ok: false, hint: T('PortFast must not be on a port to another switch.', 'PortFast нельзя включать на порту к другому коммутатору.', 'אסור להפעיל PortFast בפורט שמחובר למתג אחר.') };
+        return portPhysUp(topo, sw, port) ? { ok: true } : { ok: false, hint: T('The link is down.', 'Линк не поднят.', 'הקישור לא פעיל.') };
+      },
+    };
+  },
+  // --- EtherChannel ---
+  ecUp(sw, g, count, proto) {
+    const pn = (p) => (p === '-' ? 'mode on' : p);
+    return {
+      label: T(sw + ': Port-channel' + g + ' is up with ' + count + ' ports bundled (' + pn(proto) + ')', sw + ': Port-channel' + g + ' работает, в пучке ' + count + ' порта (' + pn(proto) + ')',
+        'ב-' + sw + ': ‏Port-channel' + g + ' פעיל, ' + count + ' פורטים בצרור (' + pn(proto) + ')'),
+      run(topo) {
+        const G = ecGroupState(topo, topo.devices[sw], g);
+        if (!G) return { ok: false, hint: T('There is no channel-group ' + g + ' on ' + sw + ' yet.', 'На ' + sw + ' пока нет channel-group ' + g + '.', 'ב-' + sw + ' עדיין אין channel-group ' + g + '.') };
+        if (G.proto !== proto) return { ok: false, hint: T(sw + ' uses ' + pn(G.proto) + ' — the task asks for ' + pn(proto) + '.', sw + ' использует ' + pn(G.proto) + ', а в задании — ' + pn(proto) + '.', 'ב-' + sw + ' מוגדר ' + pn(G.proto) + ', והמשימה דורשת ' + pn(proto) + '.') };
+        const fl = Object.values(G.flags);
+        if (fl.filter((f) => f === 'P').length >= count) return { ok: true };
+        const now = Object.keys(G.flags).map((n) => sh(n) + '(' + (G.flags[n] === 'M' ? 'D' : G.flags[n]) + ')').join(' ');
+        const why = fl.includes('I') ? T(' I = the other end does not negotiate with this one: passive + passive and auto + auto never bundle.', ' I — другой конец не договаривается с этим: passive + passive и auto + auto не собираются.', ' I = הצד השני לא מתאם עם הצד הזה: ‏passive + passive ו-auto + auto לא מתחברים.')
+          : fl.includes('s') ? T(' s = this port is set differently from its Port-channel or from the other end (mode, VLANs).', ' s — порт настроен не так, как его Port-channel или другой конец (режим, VLAN).', ' s = הפורט מוגדר אחרת מה-Port-channel שלו או מהצד השני (מצב, ‏VLAN).')
+            : T(' D = the port is down.', ' D — порт не работает.', ' D = הפורט לא פעיל.');
+        return { ok: false, hint: T('Now: ' + now + '.' + why.en, 'Сейчас: ' + now + '.' + why.ru, 'עכשיו: ' + now + '.' + why.he) };
+      },
+    };
+  },
 };
+
+// MAC коммутаторов для заданий STP по возрастанию: у кого меньше, тот без настройки приоритета и станет корнем
+function swMacs(rng, n) {
+  const h = (x, w) => x.toString(16).toUpperCase().padStart(w, '0');
+  const list = [];
+  while (list.length < n) { const m = '00' + h(rng.int(1, 0xd0), 2) + '.' + h(rng.int(0, 0xffff), 4) + '.' + h(rng.int(0, 0xffff), 4); if (!list.includes(m)) list.push(m); }
+  return list.sort((a, b) => macVal(a) - macVal(b));
+}
+function tMac(topo, id, mac) { topo.devices[id].ports[0].mac = mac; }
 
 // Устройство, которому принадлежит IP (для понятных сообщений)
 function devByIp(topo, ip) {
@@ -811,6 +907,218 @@ taskDef('roas', 'intervlan', 3, (rng) => {
         'interface ' + rp + '.' + vb, 'encapsulation dot1Q ' + vb, 'ip address ' + gb + ' ' + nb.mask] } },
     hints: [T('"encapsulation dot1Q <vlan>" must come BEFORE "ip address" on a subinterface.', '"encapsulation dot1Q <vlan>" нужно ввести ДО "ip address" на подынтерфейсе.', 'את "encapsulation dot1Q <vlan>" צריך להקליד לפני "ip address" בתת-הממשק.'),
       T('The router does not negotiate trunks — the switch port must be "switchport mode trunk".', 'Роутер не согласует trunk — на свитче нужен "switchport mode trunk".', 'הנתב לא מנהל משא ומתן על trunk — בפורט המתג צריך "switchport mode trunk".')],
+  };
+});
+
+// --- STP и EtherChannel ---
+// Треугольник из трёх коммутаторов (гигабитные кабели уже проложены) и ПК на каждом.
+// Без настройки корнем становится «старый» коммутатор с наименьшим MAC.
+function stpTriangle(rng, ids, old, opts = {}) {
+  const sp = subnetPool(rng);
+  const net = sp.lan();
+  const macs = swMacs(rng, 3);
+  const mac = { [old]: macs[0] };
+  ids.filter((x) => x !== old).forEach((x, i) => { mac[x] = macs[i + 1]; });
+  const pcPort = fa(rng.int(2, 20));
+  const pcs = ids.map((id, i) => ({ id: 'PC-' + id, sw: id, ip: host(net, 11 + i), vlan: opts.vlans ? opts.vlans[i % opts.vlans.length] : 1 }));
+  return {
+    net, pcPort, pcs, mac,
+    build(topo) {
+      const pos = { [ids[0]]: [450, 120], [ids[1]]: [240, 320], [ids[2]]: [660, 320] };
+      for (const id of ids) { tAdd(topo, '2960', id, pos[id][0], pos[id][1]); tMac(topo, id, mac[id]); }
+      tLink(topo, ids[0], 'GigabitEthernet0/1', ids[1], 'GigabitEthernet0/1');
+      tLink(topo, ids[1], 'GigabitEthernet0/2', ids[2], 'GigabitEthernet0/2');
+      tLink(topo, ids[2], 'GigabitEthernet0/1', ids[0], 'GigabitEthernet0/2');
+      const pcPos = { [ids[0]]: [450, 0], [ids[1]]: [90, 440], [ids[2]]: [810, 440] };
+      for (const p of pcs) { tAdd(topo, 'PC', p.id, pcPos[p.sw][0], pcPos[p.sw][1]); tLink(topo, p.id, 'FastEthernet0', p.sw, pcPort); tPc(topo, p.id, p.ip, net.mask); }
+      tHostname(topo, ids);
+    },
+    table: pcs.map((p) => ({ ...rowPc(p.id, p.ip, net.mask), extra: p.sw + ' ' + sh(pcPort) + (p.vlan !== 1 ? ' · VLAN ' + p.vlan : '') })),
+  };
+}
+
+taskDef('stp-root', 'stp', 2, (rng) => {
+  const ids = ['S1', 'S2', 'S3'];
+  const [core, backup, old] = rng.shuffle(ids.slice());
+  const tri = stpTriangle(rng, ids, old);
+  const pOld = tri.pcs.find((p) => p.sw === old), pBack = tri.pcs.find((p) => p.sw === backup);
+  return {
+    title: T('Choose the root bridge', 'Выберите корневой мост', 'בחירת ה-root bridge'),
+    intro: T('Three switches are cabled in a triangle, so there is a loop and STP blocks one port. Right now the root bridge is the old switch ' + old + ' — only because it has the lowest MAC address. Make the core switch ' + core + ' the root, and ' + backup + ' the backup root.',
+      'Три коммутатора соединены треугольником — есть петля, и STP блокирует один порт. Сейчас корневой мост — старый коммутатор ' + old + ', просто потому что у него самый маленький MAC. Сделайте корнем коммутатор ядра ' + core + ', а резервным корнем — ' + backup + '.',
+      'שלושה מתגים מחוברים במשולש — יש לולאה, ו-STP חוסם פורט אחד. כרגע ה-root bridge הוא המתג הישן ' + old + ' — רק כי יש לו את כתובת ה-MAC הנמוכה ביותר. יש להפוך את מתג הליבה ' + core + ' ל-root, ואת ' + backup + ' ל-root גיבוי.'),
+    steps: [
+      T('On any switch run show spanning-tree: who is the root now, and which port is BLK?', 'На любом коммутаторе выполните show spanning-tree: кто сейчас корень и какой порт в BLK?', 'בכל מתג להריץ show spanning-tree: מי ה-root עכשיו, ואיזה פורט במצב BLK?'),
+      T('Make ' + core + ' the root bridge for VLAN 1 (lower priority wins).', 'Сделайте ' + core + ' корневым мостом для VLAN 1 (меньший приоритет побеждает).', 'להפוך את ' + core + ' ל-root bridge של VLAN 1 (priority נמוך יותר מנצח).'),
+      T('Make ' + backup + ' the backup root: it must take over if ' + core + ' fails.', 'Сделайте ' + backup + ' резервным корнем: он должен заменить ' + core + ' при отказе.', 'להפוך את ' + backup + ' ל-root גיבוי: הוא צריך להחליף את ' + core + ' אם הוא נופל.'),
+      T('Verify: "This bridge is the root" on ' + core + '; the blocked port moved. PCs still ping each other.', 'Проверка: на ' + core + ' — «This bridge is the root»; заблокированный порт переместился. ПК по-прежнему пингуются.', 'בדיקה: ב-' + core + ' — ‏"This bridge is the root"; הפורט החסום זז. המחשבים עדיין עוברים ping.'),
+    ],
+    table: tri.table,
+    build: tri.build,
+    checks: [CHK.stpRoot(core, 1), CHK.stpBackup(backup, core, 1), CHK.ping(pOld.id, pBack.id, pBack.ip)],
+    solution: { cli: { [core]: ['spanning-tree vlan 1 root primary'], [backup]: ['spanning-tree vlan 1 root secondary'] } },
+    hints: [T('Bridge ID = priority + MAC. The priority is a multiple of 4096 (default 32768); the lowest Bridge ID wins.', 'Bridge ID = приоритет + MAC. Приоритет кратен 4096 (по умолчанию 32768); побеждает наименьший Bridge ID.', 'Bridge ID = ‏priority + ‏MAC. ה-priority הוא כפולה של 4096 (ברירת מחדל 32768); ה-Bridge ID הנמוך ביותר מנצח.'),
+      T('spanning-tree vlan 1 root primary on ' + core + ', root secondary on ' + backup + '.', 'spanning-tree vlan 1 root primary на ' + core + ', root secondary на ' + backup + '.', 'spanning-tree vlan 1 root primary ב-' + core + ', ו-root secondary ב-' + backup + '.')],
+  };
+});
+
+taskDef('stp-pvst', 'stp', 3, (rng) => {
+  const ids = ['S1', 'S2', 'S3'];
+  const [nA, nB] = rng.shuffle(VLAN_NAMES).slice(0, 2);
+  const vA = rng.int(5, 40) * 2, vB = vA + rng.int(1, 20) * 2;
+  const tri = stpTriangle(rng, ids, 'S3', { vlans: [vA, vB, vA] });
+  const trunkCmds = ['vlan ' + vA, 'name ' + nA, 'vlan ' + vB, 'name ' + nB, 'exit', 'interface range GigabitEthernet0/1 - 2', 'switchport mode trunk'];
+  const pA1 = tri.pcs[0], pB = tri.pcs[1], pA2 = tri.pcs[2];
+  return {
+    title: T('Share the load: one root per VLAN (PVST+)', 'Разделите нагрузку: свой корень для каждого VLAN (PVST+)', 'חלוקת עומס: root נפרד לכל VLAN ‏(PVST+)'),
+    intro: T('PVST+ builds a separate spanning tree for every VLAN. Now S3 is the root of all of them, so traffic of both VLANs uses the same links. Make S1 the root for VLAN ' + vA + ' (' + nA + ') and S2 the root for VLAN ' + vB + ' (' + nB + '); each must also be the backup root for the other VLAN.',
+      'PVST+ строит отдельное дерево для каждого VLAN. Сейчас S3 — корень всех деревьев, и трафик обоих VLAN идёт по одним и тем же каналам. Сделайте S1 корнем для VLAN ' + vA + ' (' + nA + '), а S2 — для VLAN ' + vB + ' (' + nB + '); каждый из них должен быть ещё и резервным корнем другого VLAN.',
+      'PVST+ בונה עץ נפרד לכל VLAN. כרגע S3 הוא ה-root של כולם, ולכן התעבורה של שני ה-VLAN עוברת באותם קישורים. יש להפוך את S1 ל-root של VLAN ' + vA + ' ‏(' + nA + '), ואת S2 ל-root של VLAN ' + vB + ' ‏(' + nB + '); כל אחד מהם צריך להיות גם ה-root הגיבוי של ה-VLAN השני.'),
+    steps: [
+      T('show spanning-tree vlan ' + vA + ' and vlan ' + vB + ' on S1: the root and the blocked port are the same for both VLANs.', 'show spanning-tree vlan ' + vA + ' и vlan ' + vB + ' на S1: корень и заблокированный порт у обоих VLAN одинаковые.', 'show spanning-tree vlan ' + vA + ' ו-vlan ' + vB + ' ב-S1: ה-root והפורט החסום זהים לשני ה-VLAN.'),
+      T('S1: root primary for VLAN ' + vA + ', root secondary for VLAN ' + vB + '.', 'S1: root primary для VLAN ' + vA + ', root secondary для VLAN ' + vB + '.', 'S1: ‏root primary ל-VLAN ' + vA + ', ‏root secondary ל-VLAN ' + vB + '.'),
+      T('S2: root primary for VLAN ' + vB + ', root secondary for VLAN ' + vA + '.', 'S2: root primary для VLAN ' + vB + ', root secondary для VLAN ' + vA + '.', 'S2: ‏root primary ל-VLAN ' + vB + ', ‏root secondary ל-VLAN ' + vA + '.'),
+      T('Verify: now each VLAN blocks a different link — both links carry traffic.', 'Проверка: теперь каждый VLAN блокирует свой канал — работают оба.', 'בדיקה: עכשיו כל VLAN חוסם קישור אחר — שני הקישורים עובדים.'),
+    ],
+    table: tri.table,
+    build(topo) {
+      tri.build(topo);
+      for (const id of ids) tCli(topo, id, trunkCmds);
+      for (const p of tri.pcs) tCli(topo, p.sw, ['interface ' + tri.pcPort, 'switchport mode access', 'switchport access vlan ' + p.vlan]);
+    },
+    checks: [CHK.stpRoot('S1', vA), CHK.stpRoot('S2', vB), CHK.stpBackup('S2', 'S1', vA), CHK.stpBackup('S1', 'S2', vB), CHK.ping(pA1.id, pA2.id, pA2.ip)],
+    solution: { cli: { S1: ['spanning-tree vlan ' + vA + ' root primary', 'spanning-tree vlan ' + vB + ' root secondary'], S2: ['spanning-tree vlan ' + vB + ' root primary', 'spanning-tree vlan ' + vA + ' root secondary'] } },
+    hints: [T('The commands take a VLAN number: spanning-tree vlan ' + vA + ' root primary.', 'Команды принимают номер VLAN: spanning-tree vlan ' + vA + ' root primary.', 'הפקודות מקבלות מספר VLAN: ‏spanning-tree vlan ' + vA + ' root primary.'),
+      T('The Bridge ID priority shown is priority + VLAN number (sys-id-ext): 24576 + ' + vA + ' = ' + (24576 + vA) + '.', 'В выводе приоритет = priority + номер VLAN (sys-id-ext): 24576 + ' + vA + ' = ' + (24576 + vA) + '.', 'ה-priority שמוצג = ‏priority + מספר ה-VLAN ‏(sys-id-ext): ‏24576 + ' + vA + ' = ' + (24576 + vA) + '.'),
+      T(pB.id + ' is in VLAN ' + vB + ' alone — it is there to show the second tree.', pB.id + ' один в VLAN ' + vB + ' — он нужен, чтобы было видно второе дерево.', pB.id + ' לבד ב-VLAN ' + vB + ' — הוא שם כדי לראות את העץ השני.')],
+  };
+});
+
+taskDef('stp-edge', 'stp', 1, (rng) => {
+  const sp = subnetPool(rng);
+  const net = sp.lan();
+  const ports = rng.shuffle(Array.from({ length: 20 }, (_, i) => fa(i + 2))).slice(0, 3).sort((a, b) => Number(a.split('/')[1]) - Number(b.split('/')[1]));
+  const globalWay = rng.chance(0.5);
+  const pcs = ports.map((p, i) => ({ id: 'PC' + (i + 1), port: p, ip: host(net, 11 + i) }));
+  const srv = { id: 'Server', ip: host(net, 50) };
+  const list = ports.map(sh).join(', ');
+  return {
+    title: T('PortFast and BPDU Guard on user ports', 'PortFast и BPDU Guard на портах пользователей', 'PortFast ו-BPDU Guard בפורטים של משתמשים'),
+    intro: T('Users wait 30 seconds after plugging in their PC, until STP lets the port forward. And someone could plug a home switch into a wall socket. Turn on PortFast and BPDU Guard on the PC ports of S1 (' + list + ') — but not on the uplink Gi0/1 to S2.',
+      'Пользователи ждут 30 секунд после подключения ПК, пока STP не разрешит порту передавать. А кто-нибудь может воткнуть в розетку домашний коммутатор. Включите PortFast и BPDU Guard на портах ПК коммутатора S1 (' + list + ') — но не на аплинке Gi0/1 к S2.',
+      'המשתמשים מחכים 30 שניות אחרי חיבור המחשב, עד ש-STP מאפשר לפורט להעביר תעבורה. ומישהו יכול לחבר לשקע מתג ביתי. יש להפעיל PortFast ו-BPDU Guard בפורטים של המחשבים ב-S1 ‏(' + list + ') — אבל לא ב-uplink ‏Gi0/1 אל S2.'),
+    steps: [
+      T('Configure the three PC ports together: interface range ' + list + '.', 'Настройте три порта ПК сразу: interface range ' + list + '.', 'להגדיר את שלושת פורטי המחשבים יחד: ‏interface range ' + list + '.'),
+      T('PortFast on these ports.', 'PortFast на этих портах.', 'PortFast בפורטים האלה.'),
+      globalWay ? T('BPDU Guard for all PortFast ports at once — with one global command.', 'BPDU Guard сразу для всех портов с PortFast — одной глобальной командой.', 'BPDU Guard לכל הפורטים עם PortFast בבת אחת — בפקודה גלובלית אחת.')
+        : T('BPDU Guard on the same ports.', 'BPDU Guard на тех же портах.', 'BPDU Guard באותם פורטים.'),
+      T('Do not touch Gi0/1: BPDU Guard there would shut the uplink at once.', 'Gi0/1 не трогайте: BPDU Guard там сразу выключит аплинк.', 'לא לגעת ב-Gi0/1: ‏BPDU Guard שם יכבה את ה-uplink מיד.'),
+    ],
+    table: pcs.map((p) => ({ ...rowPc(p.id, p.ip, net.mask), extra: 'S1 ' + sh(p.port) })).concat([{ ...rowPc(srv.id, srv.ip, net.mask), extra: 'S2 Fa0/1' }]),
+    build(topo) {
+      tAdd(topo, '2960', 'S1', 300, 200); tAdd(topo, '2960', 'S2', 650, 200);
+      tLink(topo, 'S1', 'GigabitEthernet0/1', 'S2', 'GigabitEthernet0/1');
+      pcs.forEach((p, i) => { tAdd(topo, 'PC', p.id, 120 + i * 180, 400); tLink(topo, p.id, 'FastEthernet0', 'S1', p.port); tPc(topo, p.id, p.ip, net.mask); });
+      tAdd(topo, 'Server', srv.id, 650, 400); tLink(topo, srv.id, 'FastEthernet0', 'S2', 'FastEthernet0/1'); tPc(topo, srv.id, srv.ip, net.mask);
+      tHostname(topo, ['S1', 'S2']);
+    },
+    checks: [...pcs.map((p) => CHK.portfast('S1', p.port)), ...pcs.map((p) => CHK.bpduguard('S1', p.port)), CHK.notErrdis('S1', 'GigabitEthernet0/1', 'S2'), CHK.ping(pcs[0].id, srv.id, srv.ip)],
+    solution: { cli: { S1: globalWay ? ['interface range ' + list, 'spanning-tree portfast', 'exit', 'spanning-tree portfast bpduguard default'] : ['interface range ' + list, 'spanning-tree portfast', 'spanning-tree bpduguard enable'] } },
+    hints: [T('PortFast only on ports to end devices (PCs, printers, servers).', 'PortFast — только на портах к конечным устройствам (ПК, принтеры, серверы).', 'PortFast רק בפורטים להתקני קצה (מחשבים, מדפסות, שרתים).'),
+      globalWay ? T('Global: spanning-tree portfast bpduguard default.', 'Глобально: spanning-tree portfast bpduguard default.', 'גלובלית: ‏spanning-tree portfast bpduguard default.') : T('On the ports: spanning-tree bpduguard enable.', 'На портах: spanning-tree bpduguard enable.', 'בפורטים: ‏spanning-tree bpduguard enable.'),
+      T('show spanning-tree shows "P2p Edge" on PortFast ports.', 'show spanning-tree показывает «P2p Edge» на портах с PortFast.', 'show spanning-tree מראה "P2p Edge" בפורטים עם PortFast.')],
+  };
+});
+
+// Два коммутатора, два параллельных кабеля, ПК одного VLAN на каждом
+function ecPairSetup(rng) {
+  const sp = subnetPool(rng);
+  const net = sp.lan();
+  const gig = rng.chance(0.5);
+  const links = gig ? ['GigabitEthernet0/1', 'GigabitEthernet0/2'] : ['FastEthernet0/23', 'FastEthernet0/24'];
+  const g = rng.int(1, 6);
+  const vlan = rng.int(5, 60) * 2, vname = rng.pick(VLAN_NAMES);
+  const pcPort = fa(rng.int(1, 12));
+  const ips = { A: host(net, 11), B: host(net, 12) };
+  const range = 'interface range ' + sh(links[0]) + ' - ' + links[1].split('/')[1];
+  return {
+    net, links, g, vlan, vname, pcPort, ips, range, po: 'Port-channel' + g,
+    build(topo) {
+      tAdd(topo, '2960', 'S1', 280, 180); tAdd(topo, '2960', 'S2', 640, 180);
+      for (const p of links) tLink(topo, 'S1', p, 'S2', p);
+      tAdd(topo, 'PC', 'PC-A', 280, 400); tAdd(topo, 'PC', 'PC-B', 640, 400);
+      tLink(topo, 'PC-A', 'FastEthernet0', 'S1', pcPort); tLink(topo, 'PC-B', 'FastEthernet0', 'S2', pcPort);
+      tPc(topo, 'PC-A', ips.A, net.mask); tPc(topo, 'PC-B', ips.B, net.mask);
+      for (const s of ['S1', 'S2']) tCli(topo, s, ['hostname ' + s, 'vlan ' + vlan, 'name ' + vname, 'exit', 'interface ' + pcPort, 'switchport mode access', 'switchport access vlan ' + vlan]);
+    },
+    table: [{ ...rowPc('PC-A', ips.A, net.mask), extra: 'S1 ' + sh(pcPort) + ' · VLAN ' + vlan }, { ...rowPc('PC-B', ips.B, net.mask), extra: 'S2 ' + sh(pcPort) + ' · VLAN ' + vlan }],
+  };
+}
+
+taskDef('ec-bundle', 'etherchannel', 2, (rng) => {
+  const e = ecPairSetup(rng);
+  const lacp = rng.chance(0.6);
+  const [m1, m2] = lacp ? ['active', rng.pick(['passive', 'active'])] : ['desirable', rng.pick(['auto', 'desirable'])];
+  const proto = lacp ? 'LACP' : 'PAgP';
+  const two = sh(e.links[0]) + ' + ' + sh(e.links[1]);
+  return {
+    title: T('Bundle two links into an EtherChannel (' + proto + ')', 'Объедините два канала в EtherChannel (' + proto + ')', 'איחוד שני קישורים ל-EtherChannel ‏(' + proto + ')'),
+    intro: T('S1 and S2 are connected with two cables (' + two + '). STP blocks one of them, so half of the bandwidth is wasted, and VLAN ' + e.vlan + ' (' + e.vname + ') does not reach the other switch yet. Bundle both links into ' + e.po + ' with ' + proto + ' and make it a trunk.',
+      'S1 и S2 соединены двумя кабелями (' + two + '). STP блокирует один из них — половина полосы пропадает, а VLAN ' + e.vlan + ' (' + e.vname + ') пока не доходит до второго коммутатора. Объедините оба канала в ' + e.po + ' по ' + proto + ' и сделайте его trunk.',
+      'S1 ו-S2 מחוברים בשני כבלים (' + two + '). ‏STP חוסם אחד מהם, כך שחצי מרוחב הפס הולך לאיבוד, ו-VLAN ' + e.vlan + ' ‏(' + e.vname + ') עדיין לא מגיע למתג השני. יש לאחד את שני הקישורים ל-' + e.po + ' עם ' + proto + ' ולהגדיר אותו כ-trunk.'),
+    steps: [
+      T('Look first: show spanning-tree — one of the two links is BLK.', 'Сначала посмотрите: show spanning-tree — один из двух каналов в BLK.', 'קודם להסתכל: ‏show spanning-tree — אחד משני הקישורים במצב BLK.'),
+      T('S1: both ports into channel-group ' + e.g + ', mode ' + m1 + '.', 'S1: оба порта в channel-group ' + e.g + ', режим ' + m1 + '.', 'S1: שני הפורטים ל-channel-group ' + e.g + ', מצב ' + m1 + '.'),
+      T('S2: both ports into channel-group ' + e.g + ', mode ' + m2 + '.', 'S2: оба порта в channel-group ' + e.g + ', режим ' + m2 + '.', 'S2: שני הפורטים ל-channel-group ' + e.g + ', מצב ' + m2 + '.'),
+      T('On both switches: interface ' + e.po + ' → switchport mode trunk (IOS copies it to both ports).', 'На обоих коммутаторах: interface ' + e.po + ' → switchport mode trunk (IOS перенесёт это на оба порта).', 'בשני המתגים: ‏interface ' + e.po + ' → ‏switchport mode trunk (ה-IOS מעתיק את זה לשני הפורטים).'),
+      T('Verify: show etherchannel summary → Po' + e.g + '(SU), both ports (P); PC-A pings PC-B.', 'Проверка: show etherchannel summary → Po' + e.g + '(SU), оба порта (P); PC-A пингует PC-B.', 'בדיקה: ‏show etherchannel summary → ‏Po' + e.g + '(SU), שני הפורטים (P); ‏PC-A עושה ping ל-PC-B.'),
+    ],
+    table: e.table,
+    build: e.build,
+    checks: [CHK.ecUp('S1', e.g, 2, proto), CHK.ecUp('S2', e.g, 2, proto), CHK.trunk('S1', e.po), CHK.trunk('S2', e.po), CHK.ping('PC-A', 'PC-B', e.ips.B)],
+    solution: { cli: { S1: [e.range, 'channel-group ' + e.g + ' mode ' + m1, 'interface port-channel ' + e.g, 'switchport mode trunk'], S2: [e.range, 'channel-group ' + e.g + ' mode ' + m2, 'interface port-channel ' + e.g, 'switchport mode trunk'] } },
+    hints: [lacp ? T('LACP: active starts the negotiation, passive only answers. At least one side must be active.', 'LACP: active сам начинает переговоры, passive только отвечает. Хотя бы одна сторона должна быть active.', 'LACP: ‏active מתחיל את המשא ומתן, ‏passive רק עונה. לפחות צד אחד חייב להיות active.')
+      : T('PAgP: desirable starts the negotiation, auto only answers. At least one side must be desirable.', 'PAgP: desirable сам начинает переговоры, auto только отвечает. Хотя бы одна сторона должна быть desirable.', 'PAgP: ‏desirable מתחיל את המשא ומתן, ‏auto רק עונה. לפחות צד אחד חייב להיות desirable.'),
+      T(e.range + ' configures both ports at once.', e.range + ' настраивает оба порта сразу.', e.range + ' מגדיר את שני הפורטים בבת אחת.'),
+      T('After bundling, STP sees one port ' + e.po + ' — nothing is blocked any more.', 'После объединения STP видит один порт ' + e.po + ' — блокировать больше нечего.', 'אחרי האיחוד STP רואה פורט אחד ' + e.po + ' — אין יותר מה לחסום.')],
+  };
+});
+
+taskDef('ts-ec', 'etherchannel', 3, (rng) => {
+  const e = ecPairSetup(rng);
+  const memb = 'interface ' + e.links[1];
+  const base = { S1: [e.range, 'channel-group ' + e.g + ' mode passive', 'interface port-channel ' + e.g, 'switchport mode trunk'], S2: [e.range, 'channel-group ' + e.g + ' mode active', 'interface port-channel ' + e.g, 'switchport mode trunk'] };
+  const all = rng.shuffle([
+    { id: 'passive', bad: [e.range, 'channel-group ' + e.g + ' mode passive'], fix: [e.range, 'channel-group ' + e.g + ' mode active'],
+      text: T('S2 was LACP passive, like S1: passive + passive never forms a channel.', 'На S2 стоял LACP passive, как и на S1: passive + passive канал не собирают.', 'ב-S2 היה LACP passive, כמו ב-S1: ‏passive + passive אף פעם לא יוצרים ערוץ.') },
+    { id: 'pagp', bad: [e.range, 'no channel-group', 'channel-group ' + e.g + ' mode desirable'], fix: [e.range, 'no channel-group', 'channel-group ' + e.g + ' mode active'],
+      text: T('S2 used PAgP (desirable) and S1 LACP: different protocols never bundle.', 'S2 использовал PAgP (desirable), а S1 — LACP: разные протоколы не объединяются.', 'S2 השתמש ב-PAgP ‏(desirable) ו-S1 ב-LACP: פרוטוקולים שונים לא מתאחדים.') },
+    { id: 'member', bad: [memb, 'switchport mode access'], fix: [memb, 'switchport mode trunk'],
+      text: T('On S2 ' + sh(e.links[1]) + ' was an access port while its ' + e.po + ' is a trunk — the port was suspended (s).', 'На S2 порт ' + sh(e.links[1]) + ' был access, а его ' + e.po + ' — trunk: порт приостановлен (s).', 'ב-S2 הפורט ' + sh(e.links[1]) + ' היה access, וה-' + e.po + ' שלו trunk — הפורט הושעה (s).') },
+    { id: 'notrunk', bad: ['interface port-channel ' + e.g, 'switchport mode access'], fix: ['interface port-channel ' + e.g, 'switchport mode trunk'],
+      text: T('On S2 ' + e.po + ' was an access port, so VLAN ' + e.vlan + ' did not cross the channel.', 'На S2 ' + e.po + ' был access-портом, и VLAN ' + e.vlan + ' не проходил через канал.', 'ב-S2 ה-' + e.po + ' היה פורט access, ולכן VLAN ' + e.vlan + ' לא עבר בערוץ.') },
+  ]);
+  const faults = [all[0]];
+  const second = all.slice(1).find((f) => !(['passive', 'pagp'].includes(f.id) && ['passive', 'pagp'].includes(all[0].id)));
+  if (rng.chance(0.5) && second) faults.push(second);
+  return {
+    title: T('Troubleshoot: the EtherChannel does not come up', 'Неисправность: EtherChannel не поднимается', 'איתור תקלות: ה-EtherChannel לא עולה'),
+    intro: T('S1 and S2 should be joined by ' + e.po + ' (LACP, trunk) over ' + sh(e.links[0]) + ' and ' + sh(e.links[1]) + ', but PC-A cannot reach PC-B in VLAN ' + e.vlan + '. S1 is configured correctly; find and fix the problem on S2.',
+      'S1 и S2 должны быть соединены через ' + e.po + ' (LACP, trunk) по ' + sh(e.links[0]) + ' и ' + sh(e.links[1]) + ', но PC-A не видит PC-B в VLAN ' + e.vlan + '. S1 настроен правильно; найдите и исправьте ошибку на S2.',
+      'S1 ו-S2 אמורים להיות מחוברים דרך ' + e.po + ' ‏(LACP, ‏trunk) על ' + sh(e.links[0]) + ' ו-' + sh(e.links[1]) + ', אבל PC-A לא מגיע ל-PC-B ב-VLAN ' + e.vlan + '. ‏S1 מוגדר נכון; יש למצוא ולתקן את התקלה ב-S2.'),
+    steps: [T('Useful commands: show etherchannel summary, show interfaces trunk, show running-config.', 'Полезные команды: show etherchannel summary, show interfaces trunk, show running-config.', 'פקודות שימושיות: ‏show etherchannel summary, ‏show interfaces trunk, ‏show running-config.'),
+      T('Flags: P — in the channel, I — stand-alone (no partner), s — suspended (settings differ), D — down.', 'Флаги: P — в канале, I — сам по себе (нет партнёра), s — приостановлен (настройки отличаются), D — не работает.', 'דגלים: P — בערוץ, ‏I — לבד (אין שותף), ‏s — מושעה (הגדרות שונות), ‏D — לא פעיל.'),
+      T('Verify: Po' + e.g + '(SU) with both ports (P) on both switches; PC-A pings PC-B.', 'Проверка: Po' + e.g + '(SU) и оба порта (P) на обоих коммутаторах; PC-A пингует PC-B.', 'בדיקה: ‏Po' + e.g + '(SU) עם שני הפורטים (P) בשני המתגים; ‏PC-A עושה ping ל-PC-B.')],
+    table: e.table,
+    build(topo) {
+      e.build(topo);
+      tCli(topo, 'S1', base.S1); tCli(topo, 'S2', base.S2);
+      for (const f of faults) tCli(topo, 'S2', f.bad);
+    },
+    checks: [CHK.ecUp('S1', e.g, 2, 'LACP'), CHK.ecUp('S2', e.g, 2, 'LACP'), CHK.ping('PC-A', 'PC-B', e.ips.B)],
+    solution: { cli: { S2: faults.flatMap((f) => f.fix) } },
+    faults: faults.map((f) => f.text),
+    hints: [T('Compare S1 and S2: show etherchannel summary on both.', 'Сравните S1 и S2: show etherchannel summary на обоих.', 'משווים בין S1 ל-S2: ‏show etherchannel summary בשניהם.'), ...faults.map((f) => f.text)],
   };
 });
 

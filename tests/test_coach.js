@@ -42,7 +42,7 @@ test('coach: every failed check at the start is explained with a fix', () => {
 });
 
 // Исправления, которые не зависят от других пунктов, должны сами сделать проверку зелёной.
-const SELF_FIXING = ['ifIp', 'vlan', 'access', 'native', 'subif', 'dhcpPool', 'excluded', 'helper', 'ripV2', 'passive', 'routerId', 'hostname', 'enableSecret', 'linePw', 'banner', 'encryption', 'noLookup', 'svi', 'swGateway', 'ssh'];
+const SELF_FIXING = ['stpRoot', 'stpBackup', 'portfast', 'bpduguard', 'ifIp', 'vlan', 'access', 'native', 'subif', 'dhcpPool', 'excluded', 'helper', 'ripV2', 'passive', 'routerId', 'hostname', 'enableSecret', 'linePw', 'banner', 'encryption', 'noLookup', 'svi', 'swGateway', 'ssh'];
 test('coach: applying "how to fix" turns the check green', () => {
   const fails = [];
   let tried = 0;

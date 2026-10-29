@@ -78,9 +78,16 @@ const Workspace = {
   },
 
   linkGeom(topo, l) {
-    const A = topo.devices[l.a.dev], B = topo.devices[l.b.dev];
-    const dx = B.x - A.x, dy = B.y - A.y, len = Math.hypot(dx, dy) || 1;
-    return { A, B, dx, dy, len, ux: dx / len, uy: dy / len };
+    const A0 = topo.devices[l.a.dev], B0 = topo.devices[l.b.dev];
+    const dx = B0.x - A0.x, dy = B0.y - A0.y, len = Math.hypot(dx, dy) || 1;
+    const ux = dx / len, uy = dy / len;
+    // параллельные кабели между одними и теми же устройствами (EtherChannel) раздвигаем, чтобы был виден каждый
+    const pair = (x) => [x.a.dev, x.b.dev].sort().join('|');
+    const same = l.cable === 'console' ? [l] : Object.values(topo.links).filter((x) => x.cable !== 'console' && pair(x) === pair(l)).sort((p, q) => (p.id < q.id ? -1 : 1));
+    let off = (same.indexOf(l) - (same.length - 1) / 2) * 16;
+    if (l.a.dev > l.b.dev) off = -off; // сдвиг в одну сторону, как бы ни был направлен кабель
+    const ox = -uy * off, oy = ux * off;
+    return { A: { x: A0.x + ox, y: A0.y + oy }, B: { x: B0.x + ox, y: B0.y + oy }, dx, dy, len, ux, uy };
   },
 
   renderLinks(topo) {
@@ -104,9 +111,10 @@ const Workspace = {
       if (l.cable === 'console') continue;
       for (const [end, dev, sign] of [[l.a, A, 1], [l.b, B, -1]]) {
         const st = linkEndState(topo, l, end);
-        let color = st === 'up' ? 'var(--led-up)' : 'var(--led-down)';
+        let color = st === 'up' || st === 'blocked' ? 'var(--led-up)' : 'var(--led-down)';
         const am = this.amber.get(end.dev + '|' + end.port);
-        if (st === 'up' && am && am > now) color = 'var(--led-amber)';
+        // оранжевый, как в Packet Tracer: порт только что поднялся или STP / EtherChannel не пускает через него кадры
+        if (st === 'blocked' || (st === 'up' && am && am > now)) color = 'var(--led-amber)';
         const d = Math.min(34, g.len * 0.28);
         const px = dev.x + sign * g.ux * d, py = dev.y + sign * g.uy * d;
         const ang = Math.atan2(sign * g.uy, sign * g.ux) * 180 / Math.PI;

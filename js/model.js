@@ -8,6 +8,7 @@ const IF_TYPES = [
   { full: 'Serial', short: 'Se', min: 's' },
   { full: 'Vlan', short: 'Vlan', min: 'v' },
   { full: 'Loopback', short: 'Lo', min: 'l' },
+  { full: 'Port-channel', short: 'Po', min: 'po' },
 ];
 
 function rangeNames(prefix, from, to) {
@@ -211,7 +212,7 @@ function portAdminUp(dev, portName) {
   if (dev.type === 'hub') return true;
   if (dev.type === 'pc') return dev.cfg.portOn !== false;
   const ic = dev.cfg.interfaces[portName];
-  return !!ic && !ic.shutdown;
+  return !!ic && !ic.shutdown && !ic.errdis;   // errdis — порт выключен защитой (BPDU Guard, EtherChannel guard)
 }
 
 function linkCableOk(topo, link) {
@@ -244,10 +245,13 @@ function portPhysUp(topo, devId, portName) {
   return portAdminUp(dev, portName) && portAdminUp(pd, peer.port);
 }
 
-// Состояние конца линка для отрисовки: 'up' | 'down'
+// Состояние конца линка для отрисовки: 'up' | 'down' | 'blocked' (линк есть, но STP или EtherChannel не пускает кадры)
 function linkEndState(topo, link, end) {
   if (link.cable === 'console') return 'console';
-  return portPhysUp(topo, end.dev, end.port) ? 'up' : 'down';
+  if (!portPhysUp(topo, end.dev, end.port)) return 'down';
+  const d = topo.devices[end.dev];
+  if (d.type === 'switch' && swPortLed(topo, d, end.port) === 'blocked') return 'blocked';
+  return 'up';
 }
 
 function touch(topo) { topo.rev = (topo.rev || 0) + 1; }
