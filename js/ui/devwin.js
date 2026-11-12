@@ -73,7 +73,7 @@ const DevWin = {
 function renderPhysTab(st, el) {
   const d = st.dev();
   const mods = d.type === 'router' ? (d.model.startsWith('43') ? MODULE_LISTS.isr4 : MODULE_LISTS.isr) : d.model === 'PC' ? MODULE_LISTS.pc : d.model === 'Laptop' ? MODULE_LISTS.laptop : [];
-  const desc = h('div', { class: 'pdesc' }, d.type === 'router' ? 'Module installation is not simulated in NetTrainer. Built-in Gigabit Ethernet ports are ready to use. Use the power switch on the rear panel to turn the device off/on.'
+  const desc = h('div', { class: 'pdesc' }, d.type === 'router' ? 'Module installation is not simulated in NetTrainer: the Gigabit Ethernet ports and a 2-port serial module (' + (DEVICE_CATALOG[d.model].module || 'HWIC-2T') + ') are ready to use. Use the power switch on the rear panel to turn the device off/on.'
     : d.type === 'switch' ? 'The switch is powered on automatically once it is connected with a power cable. There is no power button.' : 'Click the power button to turn the device off or on.');
   const list = h('div', { class: 'modules' }, h('div', { class: 'mhead' }, 'MODULES'),
     mods.map((m) => h('div', { class: 'mod', onclick: () => { desc.textContent = m + ': expansion module (decorative in NetTrainer — not simulated).'; } }, m)));
@@ -247,7 +247,17 @@ function renderConfigPane(st, pane) {
     const ic = d.cfg.interfaces[n];
     const port = getPort(d, n);
     pane.appendChild(h('div', { class: 'frow' }, h('label', null, 'Port Status'), h('label', null, h('input', { type: 'checkbox', checked: !ic.shutdown, onchange: (e) => guiIos(st, ['interface ' + n, e.target.checked ? 'no shutdown' : 'shutdown']) }), ' On')));
-    if (port) {
+    if (port && isSerialPort(n)) {
+      // как в Packet Tracer: у serial — Duplex Full и Clock Rate (выбирается на DCE-конце кабеля)
+      pane.appendChild(h('div', { class: 'frow' }, h('label', null, 'Duplex'), h('label', null, h('input', { type: 'checkbox', checked: true, disabled: true }), ' Full Duplex')));
+      const dce = iosSerialDce(topo, d, n);
+      const rates = [1200, 2400, 4800, 9600, 19200, 38400, 56000, 64000, 72000, 125000, 128000, 148000, 250000, 500000, 800000, 1000000, 1300000, 2000000, 4000000];
+      const cur = ic.clockRate || (dce ? 2000000 : null);
+      const csel = h('select', { class: 'inp', disabled: !dce }, (dce ? [] : [h('option', { value: '' }, 'Not Set (DTE end)')]).concat(rates.map((r) => h('option', { value: r, selected: r === cur }, String(r)))));
+      csel.addEventListener('change', () => guiIos(st, ['interface ' + n, 'clock rate ' + csel.value]));
+      pane.appendChild(h('div', { class: 'frow' }, h('label', null, 'Clock Rate'), csel));
+      pane.appendChild(h('div', { class: 'frow muted' }, h('label', null, 'Encapsulation'), h('span', null, ic.serialEncap === 'ppp' ? 'PPP' : 'HDLC')));
+    } else if (port) {
       pane.appendChild(h('div', { class: 'frow' }, h('label', null, 'Bandwidth'), h('label', null, h('input', { type: 'checkbox', checked: true, disabled: true }), ' Auto  ', n.startsWith('Gigabit') ? '1000 Mbps' : '100 Mbps')));
       pane.appendChild(h('div', { class: 'frow' }, h('label', null, 'Duplex'), h('label', null, h('input', { type: 'checkbox', checked: true, disabled: true }), ' Auto  Full Duplex')));
       pane.appendChild(h('div', { class: 'frow' }, h('label', null, 'MAC Address'), h('input', { class: 'inp', value: port.mac, disabled: true })));

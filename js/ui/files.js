@@ -16,6 +16,7 @@ function loadProject(obj, label) {
   App.checkpoint();
   DevWin.closeAll();
   restoreTopoInPlace(App.sandbox, JSON.stringify(obj));
+  netBoot(App.sandbox);   // как включение всех устройств: выборы DR/BDR заново
   Workspace.selected = null;
   App.projectName = label;
   App.changed();

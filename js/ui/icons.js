@@ -290,8 +290,19 @@ function frontPanel(dev, topo, scale = 1) {
     });
     // слоты модулей с заглушками
     const slots = isr4 ? 3 : 2;
+    const serials = dev.ports.filter((p) => isSerialPort(p.name)).map((p) => p.name);
     for (let i = 0; i < slots; i++) {
       const sx = 70 + i * 70, sy = 6, sh = isr4 ? 30 : 18;
+      if (i === 0 && serials.length) {
+        // модуль с двумя serial-портами (HWIC-2T / NIM-2T)
+        body += '<rect x="' + sx + '" y="' + sy + '" width="62" height="' + sh + '" rx="1" fill="#2f3a46" stroke="#8a96a3" stroke-width=".7"/>';
+        serials.forEach((p, k) => {
+          body += portJack(sx + 8 + k * 26, sy + sh / 2 - 4.5, p, 18, 8);
+          body += '<text x="' + (sx + 17 + k * 26) + '" y="' + (sy + sh - 1.2) + '" font-size="2.6" text-anchor="middle" fill="#dfe5ea">S' + p.slice(6) + '</text>';
+        });
+        body += '<text x="' + (sx + 31) + '" y="' + (sy + 3.6) + '" font-size="2.8" text-anchor="middle" fill="#c9d1d8">' + escapeHtml(cat.module || 'HWIC-2T') + '</text>';
+        continue;
+      }
       body += '<rect x="' + sx + '" y="' + sy + '" width="62" height="' + sh + '" rx="1" fill="#0f1012" stroke="#5a5e63" stroke-width=".7"/>';
       body += '<rect x="' + (sx + 3) + '" y="' + (sy + 2.5) + '" width="56" height="' + (sh - 5) + '" fill="none" stroke="#2c2f33" stroke-width=".6"/>';
       body += '<circle cx="' + (sx + 5) + '" cy="' + (sy + sh / 2) + '" r="1.2" fill="#7d838a"/><circle cx="' + (sx + 57) + '" cy="' + (sy + sh / 2) + '" r="1.2" fill="#7d838a"/>';

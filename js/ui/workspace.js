@@ -1,7 +1,7 @@
 'use strict';
 // Логическая рабочая область: устройства, кабели, индикаторы портов, инструменты.
 
-const CABLE_NAMES = { straight: 'Copper Straight-Through', cross: 'Copper Cross-Over', console: 'Console', auto: 'Automatic' };
+const CABLE_NAMES = { straight: 'Copper Straight-Through', cross: 'Copper Cross-Over', console: 'Console', auto: 'Automatic', serial: 'Serial DCE', dce: 'Serial DCE', dte: 'Serial DTE' };
 
 const Workspace = {
   svg: null, vpG: null,
@@ -100,6 +100,11 @@ const Workspace = {
       if (l.cable === 'console') {
         const mx = (A.x + B.x) / 2 - g.uy * 30, my = (A.y + B.y) / 2 + g.ux * 30;
         line = svgEl('path', { d: 'M' + A.x + ' ' + A.y + ' Q' + mx + ' ' + my + ' ' + B.x + ' ' + B.y, class: 'link console' });
+      } else if (l.cable === 'serial') {
+        // serial — красная линия с «молнией» посередине, как в Packet Tracer
+        const mx = (A.x + B.x) / 2, my = (A.y + B.y) / 2, u = Math.min(10, g.len / 6);
+        const pt = (k, n) => (mx + g.ux * k - g.uy * n) + ' ' + (my + g.uy * k + g.ux * n);
+        line = svgEl('path', { d: 'M' + A.x + ' ' + A.y + ' L' + pt(-u, 0) + ' L' + pt(-u * 0.2, u * 0.7) + ' L' + pt(u * 0.2, -u * 0.7) + ' L' + pt(u, 0) + ' L' + B.x + ' ' + B.y, class: 'link serial' });
       } else {
         line = svgEl('line', { x1: A.x, y1: A.y, x2: B.x, y2: B.y, class: 'link ' + l.cable + (swLinkStorm(topo, l) ? ' storm' : '') });
       }
@@ -476,12 +481,14 @@ const Workspace = {
     if (st.dev === devId) return;
     if (auto) {
       const A = topo.devices[st.dev];
-      const prefer = (A.type === 'router' || A.type === 'switch') && dev.type !== 'pc' ? 'Gigabit' : null;
+      const serialStart = isSerialPort(st.port);
+      const prefer = serialStart ? 'Serial' : (A.type === 'router' || A.type === 'switch') && dev.type !== 'pc' ? 'Gigabit' : null;
       let port = firstFreePort(dev, prefer, false);
+      if (port && isSerialPort(port) !== serialStart) port = null;
       if (!port) { toast(dev.name + ': no free ports'); return; }
       // перевыбрать порт старта с учётом второго устройства
       let sport = st.port;
-      if ((dev.type === 'router' || dev.type === 'switch') && A.type !== 'pc') sport = firstFreePort(A, 'Gigabit', false) || sport;
+      if (!serialStart && (dev.type === 'router' || dev.type === 'switch') && A.type !== 'pc') { const g = firstFreePort(A, 'Gigabit', false); if (g && !isSerialPort(g)) sport = g; }
       this.makeLink(st.dev, sport, devId, port, 'auto');
     } else {
       this.portMenu(dev, e.clientX, e.clientY, (port) => this.makeLink(st.dev, st.port, devId, port, App.cableType));
@@ -491,12 +498,13 @@ const Workspace = {
   portMenu(dev, x, y, cb) {
     const cat = DEVICE_CATALOG[dev.model];
     const wantConsole = App.cableType === 'console';
-    const names = [...(cat.menu || []), ...cat.ports];
+    const wantSerial = ['serial', 'dce', 'dte'].includes(App.cableType);
+    const names = [...(cat.menu || []), ...dev.ports.filter((p) => !p.console).map((p) => p.name)];
     const items = names.map((n) => {
       const p = getPort(dev, n);
       const isCon = p && p.console;
-      const ok = p && !p.link && !!isCon === wantConsole;
-      const color = !p ? '#555' : isCon ? '#2b6f9e' : n.startsWith('Gigabit') ? '#e87f3a' : '#e8c34a';
+      const ok = p && !p.link && !!isCon === wantConsole && (App.cableType === 'auto' || isCon || isSerialPort(n) === wantSerial);
+      const color = !p ? '#555' : isCon ? '#2b6f9e' : isSerialPort(n) ? '#d32f2f' : n.startsWith('Gigabit') ? '#e87f3a' : '#e8c34a';
       return { label: n + (p && p.link ? '  (in use)' : ''), disabled: !ok, icon: '<span class="pdot" style="background:' + color + '"></span>', action: () => cb(n) };
     });
     showMenu(items, x, y, { cls: 'portmenu' });
@@ -510,7 +518,7 @@ const Workspace = {
     clear(this.layers.temp);
     if (r.error) {
       App.undoStacks[App.topoKey()].pop();
-      const msg = { 'port-busy': 'Port is already in use', 'port-type': 'This cable does not fit these ports (console cable: RS 232 ↔ Console)', 'same-device': 'Cannot connect a device to itself' }[r.error] || r.error;
+      const msg = { 'port-busy': 'Port is already in use', 'port-type': 'This cable does not fit these ports (console: RS 232 ↔ Console; Serial DCE/DTE: serial ↔ serial port only)', 'same-device': 'Cannot connect a device to itself' }[r.error] || r.error;
       toast(msg, 'err');
       return;
     }

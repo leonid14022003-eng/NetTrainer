@@ -25,7 +25,7 @@ const PALETTE = [
   ] },
   { id: 'connections', label: 'Connections', icon: 'i-bolt', key: 'Ctrl+Alt+O', subs: [
     { id: 'conn', label: 'Connections', icon: 'i-bolt', cables: [['auto', 'c-auto', 'Automatically Choose Connection Type'], ['console', 'c-console', 'Console'], ['straight', 'c-straight', 'Copper Straight-Through'], ['cross', 'c-cross', 'Copper Cross-Over'],
-      ['fiber', 'c-fiber', 'Fiber', true], ['phone', 'c-phone', 'Phone', true], ['coax', 'c-coax', 'Coaxial', true], ['dce', 'c-dce', 'Serial DCE', true], ['dte', 'c-dte', 'Serial DTE', true], ['octal', 'c-octal', 'Octal', true], ['usb', 'c-usb', 'USB', true]] },
+      ['fiber', 'c-fiber', 'Fiber', true], ['phone', 'c-phone', 'Phone', true], ['coax', 'c-coax', 'Coaxial', true], ['dce', 'c-dce', 'Serial DCE'], ['dte', 'c-dte', 'Serial DTE'], ['octal', 'c-octal', 'Octal', true], ['usb', 'c-usb', 'USB', true]] },
     { id: 'structured', label: 'Structured Cabling', icon: 'i-grid', physicalOnly: true, items: [NA('Patch Panel', 'i-grid'), NA('Wall Mount', 'i-grid'), NA('Patch Panel 2', 'i-grid'), NA('Wall Mount 2', 'i-grid')] },
   ] },
   { id: 'misc', label: 'Miscellaneous', icon: 'i-folder', key: 'Ctrl+Alt+M', subs: [

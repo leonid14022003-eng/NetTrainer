@@ -92,6 +92,7 @@ button:disabled { opacity: .45; cursor: default; }
 .wsbg { fill: transparent; }
 .link { stroke: var(--link); stroke-width: 1.6; fill: none; }
 .link.cross { stroke-dasharray: 7 4; }
+.link.serial { stroke: #d32f2f; stroke-width: 1.8; stroke-linejoin: round; }
 .link.console { stroke: #4aa7e0; stroke-width: 2; }
 /* широковещательный шторм: петля без STP — кабель мигает */
 .link.storm { stroke: var(--led-amber); stroke-width: 3; animation: stormblink 0.5s steps(2, start) infinite; }

@@ -88,6 +88,31 @@ const CMD_NOTES = [
   [/^crypto key generate rsa.*?(\d+)$/, (m) => T('Create ' + m[1] + '-bit RSA keys for SSH.', 'Создать RSA-ключи на ' + m[1] + ' бит для SSH.', 'יצירת מפתחות RSA של ' + m[1] + ' סיביות ל-SSH.')],
   [/^username (\S+) secret (\S+)/, (m) => T('Local user ' + m[1] + ' with hashed password "' + m[2] + '" (for login local).', 'Локальный пользователь ' + m[1] + ' с хешированным паролем «' + m[2] + '» (для login local).', 'משתמש מקומי ' + m[1] + ' עם סיסמה מגובבת "' + m[2] + '" (עבור login local).')],
   [/^ip ssh version 2/, () => T('Use the more secure SSH version 2.', 'Использовать более надёжный SSH версии 2.', 'שימוש ב-SSH גרסה 2 המאובטחת יותר.')],
+  // OSPF: тонкая настройка, serial, Port Security
+  [/^clear ip ospf process/, () => T('Restart OSPF on this router: a new router-id takes effect and DR/BDR are elected again (elections are non-preemptive).', 'Перезапустить OSPF на этом роутере: новый router-id вступает в силу, DR/BDR выбираются заново (выборы не вытесняющие).', 'הפעלה מחדש של OSPF בנתב הזה: ה-router-id החדש נכנס לתוקף ונבחרים מחדש DR/BDR (הבחירות אינן דוחקות).')],
+  [/^ip ospf priority (\d+)/, (m) => T('DR election priority ' + m[1] + ' on this segment (0 = never DR/BDR, highest wins).', 'Приоритет на выборах DR ' + m[1] + ' на этом сегменте (0 — никогда не DR/BDR, побеждает больший).', 'עדיפות ' + m[1] + ' בבחירות DR בסגמנט הזה (0 — אף פעם לא DR/BDR, הגבוה מנצח).')],
+  [/^ip ospf hello-interval (\d+)/, (m) => T('Send Hello every ' + m[1] + ' s — must match the neighbour on this link.', 'Hello каждые ' + m[1] + ' с — должно совпадать с соседом на этом линке.', 'Hello כל ' + m[1] + ' שניות — חייב להיות זהה לשכן בקישור הזה.')],
+  [/^ip ospf dead-interval (\d+)/, (m) => T('Neighbour is dead after ' + m[1] + ' s without Hello — must match the neighbour.', 'Сосед считается мёртвым через ' + m[1] + ' с без Hello — должно совпадать с соседом.', 'השכן נחשב מת אחרי ' + m[1] + ' שניות בלי Hello — חייב להיות זהה לשכן.')],
+  [/^no ip ospf hello-interval/, () => T('Back to the default Hello of 10 s (Dead 40 s).', 'Вернуть Hello по умолчанию — 10 с (Dead 40 с).', 'חזרה ל-Hello ברירת מחדל של 10 שניות (Dead 40).')],
+  [/^no ip ospf dead-interval/, () => T('Back to the default Dead interval (4 × Hello).', 'Вернуть Dead по умолчанию (4 × Hello).', 'חזרה ל-Dead ברירת מחדל (4 × Hello).')],
+  [/^ip ospf cost (\d+)/, (m) => T('Set the OSPF cost of this interface by hand: ' + m[1] + ' (beats the bandwidth formula).', 'Задать OSPF cost интерфейса вручную: ' + m[1] + ' (важнее формулы из bandwidth).', 'קביעת cost של OSPF לממשק ידנית: ' + m[1] + ' (גובר על הנוסחה לפי bandwidth).')],
+  [/^bandwidth (\d+)/, (m) => T('Bandwidth ' + m[1] + ' kbit/s for metrics only: OSPF cost = reference / ' + m[1] + '. The real speed does not change.', 'Bandwidth ' + m[1] + ' кбит/с только для метрик: OSPF cost = reference / ' + m[1] + '. Реальная скорость не меняется.', 'Bandwidth ' + m[1] + ' קילוביט לשנייה רק למטריקות: cost של OSPF = reference / ' + m[1] + '. המהירות האמיתית לא משתנה.')],
+  [/^auto-cost reference-bandwidth (\d+)/, (m) => T('Reference bandwidth ' + m[1] + ' Mbit/s: cost = ' + m[1] + ' / speed. Set the same value on ALL routers.', 'Reference bandwidth ' + m[1] + ' Мбит/с: cost = ' + m[1] + ' / скорость. Одинаково на ВСЕХ роутерах.', 'Reference bandwidth ‏' + m[1] + ' מגה-ביט: cost = ' + m[1] + ' / מהירות. אותו ערך בכל הנתבים.')],
+  [/^default-information originate( always)?/, (m) => T('Advertise this router\'s default route into OSPF (it becomes an ASBR, LSA type 5' + (m[1] ? '; "always" — even without its own default route' : '; it needs its own ip route 0.0.0.0 first') + ').', 'Раздать маршрут по умолчанию этого роутера в OSPF (он станет ASBR, LSA тип 5' + (m[1] ? '; "always" — даже без своего маршрута по умолчанию' : '; сначала нужен свой ip route 0.0.0.0') + ').', 'הפצת נתיב ברירת המחדל של הנתב ל-OSPF (הוא נעשה ASBR, ‏LSA מסוג 5' + (m[1] ? '; "always" — גם בלי נתיב ברירת מחדל משלו' : '; קודם צריך ip route 0.0.0.0 משלו') + ').')],
+  [/^ip ospf (\d+) area (\d+)/, (m) => T('Enable OSPF process ' + m[1] + ' directly on this interface, area ' + m[2] + '.', 'Включить OSPF процесс ' + m[1] + ' прямо на этом интерфейсе, область ' + m[2] + '.', 'הפעלת OSPF תהליך ' + m[1] + ' ישירות בממשק הזה, אזור ' + m[2] + '.')],
+  [/^clock rate (\d+)/, (m) => T('DCE end of the serial cable gives the clock: ' + m[1] + ' bit/s.', 'DCE-конец serial-кабеля задаёт синхронизацию: ' + m[1] + ' бит/с.', 'צד ה-DCE של הכבל הסדרתי נותן את השעון: ' + m[1] + ' ביט לשנייה.')],
+  [/^switchport port-security$/, () => T('Turn Port Security on (default: 1 MAC, violation shutdown, learned dynamically).', 'Включить Port Security (по умолчанию: 1 MAC, violation shutdown, адрес учится сам).', 'הפעלת Port Security (ברירת מחדל: MAC אחד, violation shutdown, הכתובת נלמדת לבד).')],
+  [/^switchport port-security maximum (\d+)/, (m) => T('Allow at most ' + m[1] + ' MAC address(es) on this port.', 'Разрешить на порту не больше ' + m[1] + ' MAC-адрес(ов).', 'לאפשר בפורט לכל היותר ' + m[1] + ' כתובות MAC.')],
+  [/^switchport port-security mac-address sticky$/, () => T('Sticky: learn MACs automatically and write them into running-config.', 'Sticky: учить MAC сами и записывать их в running-config.', 'Sticky: ללמוד כתובות MAC לבד ולכתוב אותן ל-running-config.')],
+  [/^no switchport port-security mac-address (\S+)$/, (m) => T('Remove the secure address ' + m[1] + ' (sticky or static) from this port.', 'Удалить с порта разрешённый адрес ' + m[1] + ' (sticky или статический).', 'מחיקת הכתובת המאובטחת ' + m[1] + ' (sticky או סטטית) מהפורט.')],
+  [/^show port-security address/, () => T('Table of secure MACs: which addresses each port allows and how it learned them (SecureSticky / SecureDynamic / SecureConfigured).', 'Таблица разрешённых MAC: какие адреса пускает каждый порт и как он их узнал (SecureSticky / SecureDynamic / SecureConfigured).', 'טבלת כתובות MAC מאובטחות: אילו כתובות כל פורט מאשר ואיך למד אותן (SecureSticky / SecureDynamic / SecureConfigured).')],
+  [/^show port-security interface/, () => T('Port Status, violation mode, counters and the last source MAC of one port.', 'Port Status, режим нарушения, счётчики и последний MAC-источник одного порта.', 'Port Status, מצב ההפרה, מונים וה-MAC האחרון של פורט אחד.')],
+  [/^clear port-security sticky/, () => T('Forget all learned sticky addresses.', 'Забыть все выученные sticky-адреса.', 'לשכוח את כל כתובות ה-sticky שנלמדו.')],
+  [/^switchport port-security mac-address (\S+)$/, (m) => T('Allow MAC ' + m[1] + ' on this port (static secure address).', 'Разрешить на порту MAC ' + m[1] + ' (статический адрес).', 'לאשר בפורט את ה-MAC ‏' + m[1] + ' (כתובת סטטית).')],
+  [/^switchport port-security violation (\S+)/, (m) => T({ shutdown: 'On a violation: err-disable the port.', restrict: 'On a violation: drop the frame, log it and count it — the port keeps working.', protect: 'On a violation: silently drop the frame (no log, no counter).' }[m[1]] || m[1], { shutdown: 'При нарушении: выключить порт (err-disabled).', restrict: 'При нарушении: отбросить кадр, записать в журнал и посчитать — порт работает.', protect: 'При нарушении: молча отбросить кадр (без журнала и счётчика).' }[m[1]] || m[1], { shutdown: 'בהפרה: לכבות את הפורט (err-disabled).', restrict: 'בהפרה: לזרוק את המסגרת, לרשום ולספור — הפורט ממשיך לעבוד.', protect: 'בהפרה: לזרוק בשקט (בלי יומן ובלי מונה).' }[m[1]] || m[1])],
+  [/^switchport port-security aging time (\d+)/, (m) => T('Secure addresses age out after ' + m[1] + ' min.', 'Разрешённые адреса устаревают через ' + m[1] + ' мин.', 'כתובות מאובטחות פגות אחרי ' + m[1] + ' דקות.')],
+  [/^switchport port-security aging type (\S+)/, (m) => T(m[1] === 'inactivity' ? 'Age out only after the device was silent that long.' : 'Age out after that time, whatever the traffic.', m[1] === 'inactivity' ? 'Удалять, только если устройство молчало это время.' : 'Удалять через это время независимо от трафика.', m[1] === 'inactivity' ? 'למחוק רק אם ההתקן שתק כל הזמן הזה.' : 'למחוק אחרי הזמן הזה בלי קשר לתעבורה.')],
+  [/^shutdown$/, () => T('Turn the interface off (with "no shutdown" it brings a port back from err-disabled).', 'Выключить интерфейс (вместе с "no shutdown" возвращает порт из err-disabled).', 'כיבוי הממשק (יחד עם "no shutdown" מחזיר פורט מ-err-disabled).')],
   [/^copy running-config startup-config/, () => T('Save the configuration to NVRAM so it survives a reboot.', 'Сохранить конфигурацию в NVRAM, чтобы она пережила перезагрузку.', 'שמירת התצורה ב-NVRAM כדי שתישאר אחרי אתחול.')],
 ];
 // ctx — строка режима, в котором стоит команда (interface …, spanning-tree mst configuration …): «name» в регионе MST — не имя VLAN
@@ -97,7 +122,8 @@ const MST_NOTES = [
 ];
 function cmdNote(line, ctx) {
   const list = ctx && /^spanning-tree mst configuration/.test(ctx) ? MST_NOTES.concat(CMD_NOTES) : CMD_NOTES;
-  for (const [re, f] of list) { const m = line.trim().match(re); if (m) return f(m); }
+  const t = line.trim().replace(/^do\s+/, '');   // "do <команда>" из режима конфигурации — пояснение как к самой команде
+  for (const [re, f] of list) { const m = t.match(re); if (m) return f(m); }
   return null;
 }
 // Пояснения к строкам по порядку, с учётом режима (подрежим заканчивается на exit / end)
@@ -140,6 +166,32 @@ const CHK_INFO = {
   ripV2: ['rip', 'RIPv2 sends subnet masks; "no auto-summary" keeps real subnets instead of classful summaries.', 'RIPv2 передаёт маски; «no auto-summary» сохраняет настоящие подсети вместо классовых сумм.', 'RIPv2 שולח מסכות; ‏"no auto-summary" שומר על תת-הרשתות האמיתיות במקום סיכום לפי מחלקה.'],
   passive: ['ospf', 'A passive interface sends no Hellos or updates (a LAN without routers), but its network is still advertised.', 'Пассивный интерфейс не шлёт Hello и обновления (LAN без роутеров), но его сеть всё равно объявляется.', 'ממשק פסיבי לא שולח Hello ועדכונים (LAN בלי נתבים), אבל הרשת שלו עדיין מפורסמת.'],
   routerId: ['ospf', 'The router ID names the OSPF router. A changed ID takes effect after "clear ip ospf process" or a reload.', 'Router ID — имя роутера в OSPF. Новый ID действует после «clear ip ospf process» или перезагрузки.', 'ה-router ID הוא השם של הנתב ב-OSPF. ‏ID חדש נכנס לתוקף אחרי "clear ip ospf process" או אתחול.'],
+  staticKind: ['static', 'Static routes come in kinds: recursive (next-hop IP — two lookups: the next hop, then the exit interface), directly attached (exit interface only — one lookup; fine on point-to-point serial), fully specified (interface AND next hop — for Ethernet) and default (0.0.0.0/0 — everything else).',
+    'Статические маршруты бывают разные: рекурсивный (IP следующего узла — два поиска: next hop, потом выходной интерфейс), directly attached (только выходной интерфейс — один поиск; нормально на serial точка-точка), fully specified (интерфейс И next hop — для Ethernet) и маршрут по умолчанию (0.0.0.0/0 — «всё остальное»).',
+    'נתיבים סטטיים הם מכמה סוגים: רקורסיבי (IP של הקפיצה הבאה — שני חיפושים: ה-next hop ואז ממשק היציאה), directly attached (ממשק יציאה בלבד — חיפוש אחד; תקין ב-serial נקודה-לנקודה), fully specified (ממשק וגם next hop — ל-Ethernet) וברירת מחדל (0.0.0.0/0 — כל השאר).'],
+  ospfRole: ['ospf', 'On an Ethernet segment OSPF elects a DR and a BDR: highest interface priority, then highest router ID; priority 0 never takes a role. The election is non-preemptive — a better router that comes later does not take over until the DR/BDR disappears or the OSPF process is reset.',
+    'На Ethernet-сегменте OSPF выбирает DR и BDR: больший priority интерфейса, затем больший router ID; priority 0 роль не получает никогда. Выборы не вытесняющие — более «сильный» роутер, пришедший позже, роль не отбирает, пока DR/BDR не пропадёт или процесс OSPF не будет сброшен.',
+    'בסגמנט Ethernet ‏OSPF בוחר DR ו-BDR: ה-priority הגבוה של הממשק, אחר כך ה-router ID הגבוה; priority 0 אף פעם לא מקבל תפקיד. הבחירות אינן דוחקות — נתב "חזק" שמגיע מאוחר לא לוקח תפקיד עד שה-DR/BDR נעלם או שתהליך ה-OSPF מאותחל.'],
+  ospfPrio: ['ensa02', 'The interface priority (0–255, default 1) decides the DR/BDR election on that segment. 0 means "never DR or BDR".', 'Priority интерфейса (0–255, по умолчанию 1) решает выборы DR/BDR на этом сегменте. 0 — «никогда не DR и не BDR».', 'ה-priority של הממשק (0–255, ברירת מחדל 1) מכריע את בחירות ה-DR/BDR בסגמנט. 0 פירושו "אף פעם לא DR ולא BDR".'],
+  ospfMethod: ['ensa02', 'Three ways enable OSPF on an interface and give the same network: "network <network> <wildcard> area 0" (every interface in that subnet), "network <interface IP> 0.0.0.0 area 0" (exactly one interface) and "ip ospf <pid> area 0" on the interface itself. A "network" statement is NOT a list of networks to advertise — it picks interfaces.',
+    'Три способа включить OSPF на интерфейсе дают одинаковую сеть: "network <сеть> <wildcard> area 0" (все интерфейсы этой подсети), "network <IP интерфейса> 0.0.0.0 area 0" (ровно один интерфейс) и "ip ospf <pid> area 0" прямо на интерфейсе. Команда network — НЕ список сетей для рассылки, она выбирает интерфейсы.',
+    'שלוש דרכים להפעיל OSPF בממשק נותנות אותה רשת: ‏"network <רשת> <wildcard> area 0" (כל הממשקים בתת-רשת), ‏"network <IP של ממשק> 0.0.0.0 area 0" (ממשק אחד בדיוק) ו-"ip ospf <pid> area 0" בממשק עצמו. פקודת network אינה רשימת רשתות לפרסום — היא בוחרת ממשקים.'],
+  ospfVia: ['ensa02', 'OSPF picks the path with the lowest total cost = the sum of the costs of the OUTGOING interfaces on the way. cost = reference bandwidth / interface bandwidth, so "bandwidth" or "ip ospf cost" changes which path wins. Each router computes from itself — a change on R1 does not change R2\'s way back.',
+    'OSPF выбирает путь с наименьшей суммарной стоимостью = сумма cost ИСХОДЯЩИХ интерфейсов по пути. cost = reference bandwidth / bandwidth интерфейса, поэтому "bandwidth" или "ip ospf cost" меняют победивший путь. Каждый роутер считает от себя — изменение на R1 не меняет обратный путь R2.',
+    'OSPF בוחר את הדרך עם העלות הכוללת הנמוכה = סכום ה-cost של ממשקי היציאה לאורך הדרך. ‏cost = reference bandwidth / bandwidth של הממשק, ולכן "bandwidth" או "ip ospf cost" משנים איזו דרך מנצחת. כל נתב מחשב מעצמו — שינוי ב-R1 לא משנה את דרך החזרה של R2.'],
+  ospfDefault: ['ensa02', 'One border router knows the way out: it has its own static default route, and "default-information originate" makes it an ASBR that floods it as an external LSA type 5. The other routers see O*E2 0.0.0.0/0 and "Gateway of last resort is …".',
+    'Один граничный роутер знает выход наружу: у него свой статический маршрут по умолчанию, а "default-information originate" делает его ASBR, который рассылает этот маршрут как внешний LSA тип 5. Остальные видят O*E2 0.0.0.0/0 и "Gateway of last resort is …".',
+    'נתב גבול אחד יודע את הדרך החוצה: יש לו נתיב ברירת מחדל סטטי משלו, ו-"default-information originate" הופך אותו ל-ASBR שמפיץ אותו כ-LSA חיצוני מסוג 5. שאר הנתבים רואים O*E2 0.0.0.0/0 ו-"Gateway of last resort is …".'],
+  psec: ['srwe11', 'Port Security limits which and how many MAC addresses may use an access port. A foreign MAC when the limit is full is a violation: shutdown (err-disabled), restrict (drop + log + counter) or protect (drop silently). It works only on access ports.',
+    'Port Security ограничивает, какие и сколько MAC-адресов могут работать через access-порт. Чужой MAC при заполненном лимите — нарушение: shutdown (err-disabled), restrict (отброс + журнал + счётчик) или protect (молча отбросить). Работает только на access-порту.',
+    'Port Security מגביל אילו וכמה כתובות MAC יכולות לעבוד דרך פורט access. ‏MAC זר כשהמכסה מלאה הוא הפרה: shutdown ‏(err-disabled), ‏restrict (זריקה + יומן + מונה) או protect (זריקה בשקט). עובד רק בפורט access.'],
+  psecLearned: ['srwe11', 'With sticky learning the port takes the MAC from the first frame and writes it into running-config as "switchport port-security mac-address sticky <MAC>". After "copy run start" it survives a reload.',
+    'При обучении sticky порт берёт MAC из первого кадра и записывает его в running-config как "switchport port-security mac-address sticky <MAC>". После "copy run start" адрес переживает перезагрузку.',
+    'בלמידת sticky הפורט לוקח את ה-MAC מהמסגרת הראשונה וכותב אותו ל-running-config כ-"switchport port-security mac-address sticky <MAC>". אחרי "copy run start" הכתובת שורדת reload.'],
+  psecUp: ['srwe11', 'In violation mode shutdown the port goes err-disabled. Remove the cause first (the foreign device or the wrong secure address), otherwise the next frame shuts it again; then "shutdown" + "no shutdown".',
+    'В режиме нарушения shutdown порт уходит в err-disabled. Сначала уберите причину (чужое устройство или неверный разрешённый адрес), иначе следующий кадр снова его выключит; потом "shutdown" + "no shutdown".',
+    'במצב הפרה shutdown הפורט עובר ל-err-disabled. קודם מסירים את הסיבה (התקן זר או כתובת מורשית שגויה), אחרת המסגרת הבאה תכבה אותו שוב; ואז "shutdown" + "no shutdown".'],
+  portsShut: ['srwe11', 'The first rule of switch security: unused ports are shut down, so nobody can plug in a foreign laptop or switch.', 'Первое правило безопасности коммутатора: неиспользуемые порты выключены, чтобы никто не подключил чужой ноутбук или свитч.', 'הכלל הראשון של אבטחת מתג: פורטים שלא בשימוש כבויים, כדי שאף אחד לא יחבר מחשב נייד או מתג זר.'],
   ospfNbrs: ['ospf', 'OSPF neighbors need the same subnet and mask, the same area, non-passive interfaces and a network statement that covers the link.', 'Соседям OSPF нужны одинаковые подсеть и маска, одна area, непассивные интерфейсы и команда network, покрывающая канал.', 'שכני OSPF צריכים אותה תת-רשת ומסכה, אותו area, ממשקים לא פסיביים ופקודת network שמכסה את הקישור.'],
   hostname: ['itn02', 'A unique hostname identifies the device in the prompt and in logs.', 'Уникальное имя видно в приглашении и логах.', 'שם ייחודי מזהה את ההתקן בסמן וביומנים.'],
   enableSecret: ['itn02', '"enable secret" protects privileged mode with a hashed password.', '«enable secret» защищает привилегированный режим хешированным паролем.', '"enable secret" מגן על המצב המורשה בסיסמה מגובבת.'],
@@ -186,8 +238,18 @@ const CHK_FIX = {
   helper: (dev, ifn, ip) => [fxCli(dev, ['interface ' + ifn, 'ip helper-address ' + ip])],
   ripV2: (dev) => [fxCli(dev, ['router rip', 'version 2', 'no auto-summary'])],
   passive: (dev, proto, ifn) => [fxSol([dev], /passive-interface/, fxCli(dev, [proto === 'rip' ? 'router rip' : 'router ospf 1', 'passive-interface ' + ifn]))],
-  routerId: (dev, rid) => [fxSol([dev], /^router-id/, fxCli(dev, ['router ospf 1', 'router-id ' + rid]))],
-  ospfNbrs: () => [fxSol(null, /^router ospf/)],
+  routerId: (dev, rid) => [fxSol([dev], /^router-id/, fxCli(dev, ['router ospf 1', 'router-id ' + rid])), { dev, via: 'exec', lines: ['clear ip ospf process'] }],
+  ospfNbrs: () => [fxSol(null, /^router ospf|ip ospf (hello|dead)-interval/)],
+  staticKind: (dev, net) => [fxSol([dev], new RegExp('^ip route ' + net.replace(/\./g, '\\.') + ' '))],
+  ospfRole: () => [fxSol(null, /ip ospf priority|clear ip ospf process/)],
+  ospfPrio: (dev, ifn, prio) => [fxCli(dev, ['interface ' + ifn, 'ip ospf priority ' + prio]), { dev, via: 'exec', lines: ['clear ip ospf process'] }],
+  ospfMethod: (dev) => [fxSol([dev], /^router ospf|^router-id|^network|ip ospf \d+ area/)],
+  ospfVia: (dev) => [fxSol([dev], /^bandwidth|ip ospf cost/)],
+  ospfDefault: () => [fxSol(null, /^ip route 0\.0\.0\.0|^router ospf|default-information/)],
+  psec: (sw) => [fxSol([sw], /port-security|switchport mode access/)],
+  psecLearned: (sw, port, pc) => [{ dev: pc, via: 'gui', lines: ['Desktop → Command Prompt → ping <server>'] }, { dev: sw, via: 'exec', lines: ['show port-security address'] }],
+  psecUp: (sw, port) => [fxSol([sw], /port-security mac-address|^shutdown|^no shutdown/, fxCli(sw, ['interface ' + port, 'shutdown', 'no shutdown']))],
+  portsShut: (sw) => [fxSol([sw], /^interface range|^shutdown$/)],
   hostname: (dev, name) => [fxCli(dev, ['hostname ' + name])],
   enableSecret: (dev, pw) => [fxCli(dev, ['enable secret ' + pw])],
   linePw: (dev, line, pw) => [fxCli(dev, [line === 'con' ? 'line console 0' : 'line vty 0 4', 'password ' + pw, 'login'])],
@@ -208,7 +270,7 @@ for (const k of Object.keys(CHK)) {
 
 // Строки решения, относящиеся к проверке: блоки «режим + команды внутри» (interface …, router …, vlan …).
 const SUBMODE_RE = /^(interface |vlan \d|router |ip dhcp pool |line |spanning-tree mst configuration)/;
-const CHILD_RE = /^(no )?(revision|instance |channel-group|channel-protocol|spanning-tree|ip address|shutdown|description|switchport|encapsulation|ip helper-address|name |network |default-router|dns-server|version|auto-summary|passive-interface|router-id|default-information|password|login|transport|exec-timeout|ipv6 address|ip ospf|bandwidth|duplex|speed|lease)/;
+const CHILD_RE = /^(no )?(revision|instance |channel-group|channel-protocol|spanning-tree|ip address|shutdown|description|switchport|encapsulation|ip helper-address|name |network |default-router|dns-server|version|auto-summary|passive-interface|router-id|default-information|password|login|transport|exec-timeout|ipv6 address|ip ospf|bandwidth|duplex|speed|lease|auto-cost|clock rate|do )/;
 function solExtract(task, devs, re) {
   const out = [];
   for (const [dev, cmds] of Object.entries((task.solution && task.solution.cli) || {})) {
@@ -274,6 +336,11 @@ const CLI_TOPICS = [
   [/channel-group|^interface port-channel/i, T('EtherChannel', 'EtherChannel', 'EtherChannel')],
   [/dhcp|default-router|dns-server|helper/, T('DHCP', 'DHCP', 'DHCP')],
   [/^router ospf|area|router-id/, T('OSPF', 'OSPF', 'OSPF')],
+  [/ip ospf priority|clear ip ospf process/, T('DR/BDR election', 'выборы DR/BDR', 'בחירות DR/BDR')],
+  [/^bandwidth|ip ospf cost|auto-cost/, T('OSPF cost', 'стоимость OSPF', 'עלות OSPF')],
+  [/default-information/, T('default route in OSPF', 'маршрут по умолчанию в OSPF', 'נתיב ברירת מחדל ב-OSPF')],
+  [/port-security/, T('Port Security', 'Port Security', 'Port Security')],
+  [/^interface range|^shutdown$/, T('unused ports off', 'выключить неиспользуемые порты', 'כיבוי פורטים לא בשימוש')],
   [/^router rip|^version|auto-summary/, T('RIP', 'RIP', 'RIP')],
   [/passive-interface/, T('passive interfaces', 'пассивные интерфейсы', 'ממשקים פסיביים')],
   [/^(hostname|enable secret|line |password|login|banner|service password|no ip domain-lookup)/, T('basic settings and passwords', 'базовые настройки и пароли', 'הגדרות בסיס וסיסמאות')],

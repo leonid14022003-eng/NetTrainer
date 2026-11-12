@@ -312,7 +312,13 @@ const CHK = {
   routerId(dev, rid) {
     return {
       label: T(dev + ': OSPF router-id ' + rid, dev + ': OSPF router-id ' + rid, dev + ': ‏OSPF router-id ' + rid),
-      run(topo) { const id = ospfRouterId(topo, topo.devices[dev]); return id === rid ? { ok: true } : { ok: false, hint: T('Router ID now: ' + (id || 'none') + ' — must be ' + rid + '.', 'Сейчас router-id: ' + (id || 'нет') + ' — нужен ' + rid + '.', 'ה-router ID עכשיו: ' + (id || 'אין') + ' — צריך להיות ' + rid + '.') }; },
+      run(topo) {
+        const D = topo.devices[dev];
+        const id = ospfRouterId(topo, D);
+        if (id === rid) return { ok: true };
+        if (D.cfg.ospf && D.cfg.ospf.routerId === rid) return { ok: false, hint: T('"router-id ' + rid + '" is configured, but the process still uses ' + id + ': it already had neighbours. Run "clear ip ospf process" (privileged mode).', 'Команда "router-id ' + rid + '" есть, но процесс всё ещё работает с ' + id + ': у него уже были соседи. Выполните "clear ip ospf process" (привилегированный режим).', 'הפקודה "router-id ' + rid + '" קיימת, אבל התהליך עדיין עובד עם ' + id + ': כבר היו לו שכנים. הריצו "clear ip ospf process" (מצב מורשה).') };
+        return { ok: false, hint: T('Router ID now: ' + (id || 'none') + ' — must be ' + rid + '.', 'Сейчас router-id: ' + (id || 'нет') + ' — нужен ' + rid + '.', 'ה-router ID עכשיו: ' + (id || 'אין') + ' — צריך ' + rid + '.') };
+      },
     };
   },
   ospfNbrs(dev, count) {
@@ -564,6 +570,14 @@ function explainReach(topo, src, ip, r) {
     return T(at + ': ' + ip + ' is in another network, but the default gateway is ' + (g || 'not set') + ' — it must be the router interface in ' + at + '\'s subnet.',
       at + ': ' + ip + ' в другой сети, а шлюз сейчас ' + (g || 'не задан') + ' — нужен интерфейс роутера в подсети ' + at + '.',
       at + ': ‏' + ip + ' ברשת אחרת, אבל השער עכשיו ' + (g || 'לא מוגדר') + ' — הוא צריך להיות ממשק הנתב בתת-הרשת של ' + at + '.');
+  }
+  if (f.code === 'arp' && S) {
+    // кадры не проходят через порт коммутатора из-за Port Security
+    for (const { sw, port } of psecIngressPorts(topo, src, S.type === 'pc' ? 'FastEthernet0' : f.at === src ? (egressFor(topo, S, ipToInt(ip)) || {}).exitIf || '' : '', true)) {
+      const ic = sw.cfg.interfaces[port];
+      if (ic.errdis === 'psecure-violation') return T(sw.name + ' ' + sh(port) + ' is err-disabled by Port Security — a MAC that is not allowed sent a frame. See "show port-security interface ' + sh(port) + '".', sw.name + ' ' + sh(port) + ' выключен Port Security (err-disabled) — кадр прислал неразрешённый MAC. Смотрите "show port-security interface ' + sh(port) + '".', sw.name + ' ' + sh(port) + ' כובה על ידי Port Security ‏(err-disabled) — MAC לא מורשה שלח מסגרת. ראו "show port-security interface ' + sh(port) + '".');
+      if (!psecAllows(topo, sw, port, ifMac(S, S.type === 'pc' ? 'FastEthernet0' : port))) return T(sw.name + ' ' + sh(port) + ' drops ' + src + '\'s frames: Port Security already has its maximum of other MACs (violation ' + ic.psec.violation + ').', sw.name + ' ' + sh(port) + ' отбрасывает кадры ' + src + ': у Port Security уже полный лимит других MAC (violation ' + ic.psec.violation + ').', sw.name + ' ' + sh(port) + ' זורק את המסגרות של ' + src + ': ב-Port Security המכסה כבר מלאה ב-MAC אחרים (violation ' + ic.psec.violation + ').');
+    }
   }
   if (f.code === 'arp') return T(at + ' cannot reach the next hop on its local network: check cables, IP/mask, VLANs and that interfaces are up.', at + ' не видит следующий узел в своей сети: проверьте кабели, IP/маску, VLAN и что интерфейсы включены.',
     at + ' לא מגיע לקפיצה הבאה ברשת המקומית שלו: בדקו כבלים, IP ומסכה, VLAN ושהממשקים פעילים.');
@@ -1641,6 +1655,9 @@ taskDef('ts-ospf', 'trouble', 3, (rng) => {
   const faults = rng.shuffle([
     { id: 'area', apply: (t) => tCli(t, 'R3', [routerCmd, 'no ' + r3w, r3w.replace('area 0', 'area 1')]), fix: T('R3 had its WAN network in area 1.', 'На R3 WAN-сеть была в области 1.', 'ב-R3 רשת ה-WAN הייתה באזור 1.'), cli: { R3: [routerCmd, 'no ' + r3w.replace('area 0', 'area 1'), r3w] } },
     { id: 'passive', apply: (t) => tCli(t, 'R2', [routerCmd, 'passive-interface ' + base.table[3].iface]), fix: T('R2 had a passive interface towards R1.', 'На R2 интерфейс в сторону R1 был пассивным.', 'ב-R2 הממשק לכיוון R1 היה פסיבי.'), cli: { R2: [routerCmd, 'no passive-interface ' + base.table[3].iface] } },
+    { id: 'hello', apply: (t) => tCli(t, 'R1', ['interface ' + base.table[1].iface, 'ip ospf hello-interval 15', 'ip ospf dead-interval 60']),
+      fix: T('R1 used Hello 15 / Dead 60 towards R2 while R2 kept 10 / 40 — mismatched Hello parameters, so R2 dropped the Hellos ("Dead timer expired").', 'R1 слал Hello 15 / Dead 60 в сторону R2, а у R2 остались 10 / 40 — параметры Hello не совпали, и R2 отбрасывал Hello ("Dead timer expired").', 'R1 שלח Hello 15 / Dead 60 לכיוון R2 בזמן ש-R2 נשאר על 10 / 40 — פרמטרי Hello לא תאמו, ו-R2 זרק את ה-Hello ‏("Dead timer expired").'),
+      cli: { R1: ['interface ' + base.table[1].iface, 'no ip ospf hello-interval', 'no ip ospf dead-interval'] } },
     { id: 'nonet', apply: (t) => tCli(t, 'R2', [routerCmd, 'no ' + r2w]), fix: T('R2 did not advertise the link to R1.', 'R2 не анонсировал сеть в сторону R1.', 'R2 לא פרסם את הרשת לכיוון R1.'), cli: { R2: [routerCmd, r2w] } },
   ]).slice(0, 1);
   return {
@@ -1681,7 +1698,7 @@ function taskRandom(topic, level, rnd = Math.random) {
 function taskBuild(task) {
   const topo = newTopology();
   task.build(topo);
-  touch(topo);
+  netBoot(topo);
   netCommit(topo);
   return topo;
 }

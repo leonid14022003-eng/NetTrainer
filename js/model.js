@@ -19,15 +19,20 @@ function rangeNames(prefix, from, to) {
 
 const DEVICE_CATALOG = {
   '4331': { type: 'router', group: 'routers', label: '4331', display: 'ISR4331', namePrefix: 'Router', console: 'Console',
-    menu: ['USB Console', 'Auxiliary', 'Console'], ports: rangeNames('GigabitEthernet0/0/', 0, 2), hint: T('ISR router, ports Gi0/0/0–0/0/2', 'ISR-роутер, порты Gi0/0/0–0/0/2') },
+    menu: ['USB Console', 'Auxiliary', 'Console'], ports: rangeNames('GigabitEthernet0/0/', 0, 2), serial: rangeNames('Serial0/1/', 0, 1), module: 'NIM-2T',
+    hint: T('ISR router, ports Gi0/0/0–0/0/2 + 2 serial (NIM-2T)', 'ISR-роутер, порты Gi0/0/0–0/0/2 + 2 serial (NIM-2T)') },
   '4321': { type: 'router', group: 'routers', label: '4321', display: 'ISR4321', namePrefix: 'Router', console: 'Console',
-    menu: ['USB Console', 'Auxiliary', 'Console'], ports: rangeNames('GigabitEthernet0/0/', 0, 1), hint: T('ISR router, ports Gi0/0/0–0/0/1', 'ISR-роутер, порты Gi0/0/0–0/0/1') },
+    menu: ['USB Console', 'Auxiliary', 'Console'], ports: rangeNames('GigabitEthernet0/0/', 0, 1), serial: rangeNames('Serial0/1/', 0, 1), module: 'NIM-2T',
+    hint: T('ISR router, ports Gi0/0/0–0/0/1 + 2 serial (NIM-2T)', 'ISR-роутер, порты Gi0/0/0–0/0/1 + 2 serial (NIM-2T)') },
   '1941': { type: 'router', group: 'routers', label: '1941', display: '1941', namePrefix: 'Router', console: 'Console',
-    menu: ['Console', 'Auxiliary'], ports: rangeNames('GigabitEthernet0/', 0, 1), hint: T('Router with 2 Gigabit ports', 'Роутер с 2 гигабитными портами') },
+    menu: ['Console', 'Auxiliary'], ports: rangeNames('GigabitEthernet0/', 0, 1), serial: rangeNames('Serial0/0/', 0, 1), module: 'HWIC-2T',
+    hint: T('Router with 2 Gigabit ports + 2 serial (HWIC-2T)', 'Роутер с 2 гигабитными портами + 2 serial (HWIC-2T)') },
   '2901': { type: 'router', group: 'routers', label: '2901', display: '2901', namePrefix: 'Router', console: 'Console',
-    menu: ['Console', 'Auxiliary'], ports: rangeNames('GigabitEthernet0/', 0, 1), hint: T('Router with 2 Gigabit ports', 'Роутер с 2 гигабитными портами') },
+    menu: ['Console', 'Auxiliary'], ports: rangeNames('GigabitEthernet0/', 0, 1), serial: rangeNames('Serial0/0/', 0, 1), module: 'HWIC-2T',
+    hint: T('Router with 2 Gigabit ports + 2 serial (HWIC-2T)', 'Роутер с 2 гигабитными портами + 2 serial (HWIC-2T)') },
   '2911': { type: 'router', group: 'routers', label: '2911', display: '2911', namePrefix: 'Router', console: 'Console',
-    menu: ['Console', 'Auxiliary'], ports: rangeNames('GigabitEthernet0/', 0, 2), hint: T('Router with 3 Gigabit ports', 'Роутер с 3 гигабитными портами') },
+    menu: ['Console', 'Auxiliary'], ports: rangeNames('GigabitEthernet0/', 0, 2), serial: rangeNames('Serial0/0/', 0, 1), module: 'HWIC-2T',
+    hint: T('Router with 3 Gigabit ports + 2 serial (HWIC-2T)', 'Роутер с 3 гигабитными портами + 2 serial (HWIC-2T)') },
   '2960': { type: 'switch', group: 'switches', label: '2960', display: '2960-24TT', namePrefix: 'Switch', console: 'Console',
     menu: ['Console'], ports: rangeNames('FastEthernet0/', 1, 24).concat(rangeNames('GigabitEthernet0/', 1, 2)),
     hint: T('Switch: 24 FastEthernet + 2 Gigabit ports', 'Свитч: 24 порта FastEthernet + 2 гигабитных') },
@@ -52,6 +57,7 @@ const CABLES = {
   console: { label: T('Console', 'Консольный'), color: '#5fb4e8' },
   straight: { label: T('Copper Straight-Through', 'Прямой (Straight-Through)'), color: '#111' },
   cross: { label: T('Copper Cross-Over', 'Перекрёстный (Cross-Over)'), color: '#111', dash: '6 4' },
+  serial: { label: T('Serial DCE', 'Последовательный (Serial DCE)'), color: '#d32f2f' },
 };
 
 function ifShort(name) {
@@ -135,10 +141,10 @@ function addDevice(topo, model, x, y, opts = {}) {
   }
   let id = opts.id;
   if (!id) { id = 'd' + topo.seq++; while (topo.devices[id]) id = 'd' + topo.seq++; }
-  const ports = cat.ports.map((p) => ({ name: p, mac: makeMac(_macRng), link: null }));
+  const ports = catPorts(cat).map((p) => ({ name: p, mac: isSerialPort(p) ? null : makeMac(_macRng), link: null }));
   if (cat.console) ports.push({ name: cat.console, mac: null, link: null, console: true });
   let cfg;
-  if (cat.type === 'router') cfg = defaultRouterCfg(cat.ports);
+  if (cat.type === 'router') cfg = defaultRouterCfg(catPorts(cat));
   else if (cat.type === 'switch') cfg = defaultSwitchCfg(cat.ports);
   else if (cat.type === 'hub') cfg = {};
   else cfg = defaultPcCfg();
@@ -156,6 +162,10 @@ function removeDevice(topo, devId) {
   delete topo.devices[devId];
 }
 
+// Порты модели: Ethernet + последовательные (модуль HWIC-2T / NIM-2T).
+function catPorts(cat) { return cat.ports.concat(cat.serial || []); }
+function isSerialPort(name) { return typeof name === 'string' && name.startsWith('Serial'); }
+
 function deviceClass(dev) { return dev.type === 'switch' || dev.type === 'hub' ? 'S' : 'H'; }
 
 // Правило CCNA: одинаковый класс устройств — кросс, разный — прямой.
@@ -169,12 +179,21 @@ function addLink(topo, aDev, aPort, bDev, bPort, cable) {
   if (!pa || !pb) return { error: 'no-port' };
   if (pa.link || pb.link) return { error: 'port-busy' };
   if (!!pa.console !== !!pb.console) return { error: 'port-type' };
+  // serial ↔ serial только кабелем Serial; Ethernet-кабель в serial-порт не вставить
+  if (isSerialPort(aPort) !== isSerialPort(bPort)) return { error: 'port-type' };
   if (pa.console) cable = 'console';
   else if (cable === 'console') return { error: 'port-type' };
+  let dce = null;
+  if (isSerialPort(aPort)) {
+    if (cable && !['auto', 'serial', 'dce', 'dte'].includes(cable)) return { error: 'port-type' };
+    dce = cable === 'dte' ? 'b' : 'a';   // Serial DCE: DCE — тот конец, с которого начали; Serial DTE — наоборот
+    cable = 'serial';
+  } else if (['serial', 'dce', 'dte'].includes(cable)) return { error: 'port-type' };
   if (!cable || cable === 'auto') cable = correctCable(A, B);
   let id = 'l' + topo.seq++;
   while (topo.links[id]) id = 'l' + topo.seq++;
   topo.links[id] = { id, a: { dev: aDev, port: aPort }, b: { dev: bDev, port: bPort }, cable };
+  if (dce) topo.links[id].dce = dce;
   pa.link = id; pb.link = id;
   return { link: topo.links[id] };
 }
@@ -217,6 +236,7 @@ function portAdminUp(dev, portName) {
 
 function linkCableOk(topo, link) {
   if (link.cable === 'console') return false;
+  if (link.cable === 'serial' || isSerialPort(link.a.port) || isSerialPort(link.b.port)) return link.cable === 'serial' && isSerialPort(link.a.port) && isSerialPort(link.b.port);
   const A = topo.devices[link.a.dev], B = topo.devices[link.b.dev];
   return correctCable(A, B) === link.cable;
 }

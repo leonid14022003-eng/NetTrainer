@@ -7,7 +7,7 @@ const _rtMap = new WeakMap();
 function netRt(topo) {
   let rt = _rtMap.get(topo);
   if (!rt) {
-    rt = { arp: {}, mac: {}, consoles: {}, lastStates: null, lastOspf: null, routeCache: null, listeners: [] };
+    rt = { arp: {}, mac: {}, consoles: {}, lastStates: null, lastOspf: null, routeCache: null, listeners: [], ospfDr: {}, ospfRidPin: {}, debug: {}, psec: {} };
     _rtMap.set(topo, rt);
   }
   return rt;
@@ -43,7 +43,7 @@ function ifMac(dev, name) {
   if (k === 'svi' || k === 'loop') return dev.ports[0].mac.slice(0, 10) + 'A0' + (name.length % 10) + '1';
   if (k === 'po') { const m = ecMembers(dev, poGroup(name))[0]; return m ? getPort(dev, m).mac : dev.ports[0].mac; }
   const p = getPort(dev, parentPort(name));
-  return p ? p.mac : '0000.0000.0000';
+  return p ? p.mac || null : '0000.0000.0000';   // у serial (HDLC) MAC-адреса нет
 }
 
 function swOperMode(topo, sw, port) {
@@ -120,6 +120,11 @@ function ifStatus(topo, dev, name) {
   if (k === 'po') { const up = ecPoUp(topo, dev, name); return { status: up ? 'up' : 'down', protocol: up ? 'up' : 'down' }; }
   if (k === 'phys') {
     const up = portPhysUp(topo, dev.id, name);
+    // serial: разная инкапсуляция на концах (HDLC ↔ PPP) — линия up, протокол down
+    if (up && isSerialPort(name)) {
+      const peer = linkPeer(topo, dev.id, name), pic = peer && topo.devices[peer.dev].cfg.interfaces[peer.port];
+      if (pic && (pic.serialEncap || 'hdlc') !== (ic.serialEncap || 'hdlc')) return { status: 'up', protocol: 'down' };
+    }
     return { status: up ? 'up' : 'down', protocol: up ? 'up' : 'down' };
   }
   if (k === 'loop') return { status: 'up', protocol: 'up' };
@@ -192,6 +197,7 @@ function l2Reach(topo, devId, ifName) {
   const dev = topo.devices[devId];
   const origin = l2Origin(dev, ifName);
   if (!origin) return [];
+  const srcMac = ifMac(dev, ifName);   // для Port Security
   const results = [];
   const visited = new Set();
   const queue = [];
@@ -232,6 +238,7 @@ function l2Reach(topo, devId, ifName) {
       if (v === null) continue;
       if (stpBlocks(sws, D, lp, v)) continue; // порт не в FWD (BLK, LIS, LRN) кадры не передаёт
       if (swInStorm(sws, D, v)) continue;
+      if (!psecAllows(topo, D, peer.port, srcMac)) continue; // Port Security: чужой MAC при заполненном лимите
       hop.vlan = v;
       const path = it.path.concat([hop]);
       const svi = 'Vlan' + v;
@@ -257,6 +264,8 @@ function l2Reach(topo, devId, ifName) {
 // ARP: ищем владельца targetIp в домене. proxy — разрешить proxy-ARP роутеров.
 function arpResolve(topo, devId, ifName, targetIp, proxy) {
   const reach = l2Reach(topo, devId, ifName);
+  // serial — точка-точка: ARP не нужен, на другом конце ровно один получатель
+  if (isSerialPort(parentPort(ifName))) return reach.length ? { ...reach[0], mac: null, reach, p2p: true } : null;
   for (const r of reach) {
     const D = topo.devices[r.dev];
     const a = ifAddr(D, r.ifName);
@@ -318,6 +327,8 @@ function ospfEnabledIfaces(topo, dev) {
 function ospfRouterId(topo, dev) {
   const o = dev.cfg.ospf;
   if (!o) return null;
+  const pin = netRt(topo).ospfRidPin[dev.id];   // RID выбран при старте процесса; новый router-id — только после clear ip ospf process
+  if (pin) return pin;
   if (o.routerId) return o.routerId;
   let loopMax = null, anyMax = null;
   for (const i of l3Ifaces(dev)) {
@@ -329,25 +340,47 @@ function ospfRouterId(topo, dev) {
   return v === null ? null : intToIp(v);
 }
 
+// Пропускная способность интерфейса для метрик (кбит/с): команда bandwidth или значение по умолчанию.
+// Реальную скорость порта bandwidth не меняет — только число для расчёта cost.
+function ifBandwidth(dev, ifName) {
+  const ic = dev.cfg.interfaces && dev.cfg.interfaces[ifName];
+  if (ic && ic.bandwidth) return ic.bandwidth;
+  if (ifName.startsWith('FastEthernet')) return 100000;
+  if (ifName.startsWith('Ethernet')) return 10000;
+  if (ifName.startsWith('Serial')) return 1544;
+  if (ifName.startsWith('Loopback')) return 8000000;
+  return 1000000;
+}
+
+// cost = reference bandwidth / bandwidth интерфейса (округление вниз, не меньше 1)
 function ospfCost(dev, ifName) {
   const ic = dev.cfg.interfaces[ifName];
   if (ic && ic.ospfCost) return ic.ospfCost;
-  const ref = (dev.cfg.ospf && dev.cfg.ospf.refBw) || 100;
-  let bw = 1000;
-  if (ifName.startsWith('FastEthernet')) bw = 100;
-  if (ifName.startsWith('Ethernet')) bw = 10;
   if (ifName.startsWith('Loopback')) return 1;
-  if (ifName.startsWith('Serial')) bw = 1.544;
-  return Math.max(1, Math.floor(ref / bw));
+  const ref = ((dev.cfg.ospf && dev.cfg.ospf.refBw) || 100) * 1000;
+  return Math.max(1, Math.floor(ref / ifBandwidth(dev, ifName)));
 }
+
+// Тип сети OSPF: serial — точка-точка (без DR/BDR), Ethernet — broadcast (выборы DR/BDR)
+function ospfNetType(dev, ifName) {
+  if (ifKind(ifName) === 'loop') return 'LOOPBACK';
+  const ic = dev.cfg.interfaces[ifName];
+  if (ic && ic.ospfNet === 'point-to-point') return 'POINT_TO_POINT';
+  if (isSerialPort(parentPort(ifName))) return 'POINT_TO_POINT';
+  return 'BROADCAST';
+}
+function ospfHello(dev, ifName) { const ic = dev.cfg.interfaces[ifName]; return (ic && ic.ospfHello) || 10; }
+function ospfDead(dev, ifName) { const ic = dev.cfg.interfaces[ifName]; return (ic && ic.ospfDead) || 4 * ospfHello(dev, ifName); }
+function ospfPrio(dev, ifName) { const ic = dev.cfg.interfaces[ifName]; return ic && ic.ospfPrio !== undefined && ic.ospfPrio !== null ? ic.ospfPrio : 1; }
 
 function isPassive(proto, ifName) {
   return !!proto && Array.isArray(proto.passive) && proto.passive.includes(ifName);
 }
 
-// Соседи OSPF: [{dev, nbr, myIf, nbrIf, nbrIp, nbrRid, area}]
+// Соседи OSPF: [{dev, nbr, myIf, nbrIf, nbrIp, nbrRid, area}]; adj.mismatch — Hello отброшены из-за разных таймеров
 function ospfAdjacencies(topo) {
   const adj = [];
+  adj.mismatch = [];
   const routers = Object.values(topo.devices).filter((d) => d.type === 'router' && d.cfg.ospf);
   for (const R of routers) {
     const rid = ospfRouterId(topo, R);
@@ -364,6 +397,12 @@ function ospfAdjacencies(topo) {
         if (nArea === null || String(nArea) !== String(i.area)) continue;
         const nrid = ospfRouterId(topo, N);
         if (!nrid || nrid === rid) continue;
+        // Hello и Dead должны совпадать — иначе Hello соседа отбрасываются
+        const mh = ospfHello(R, i.name), md = ospfDead(R, i.name), nh = ospfHello(N, r.ifName), nd = ospfDead(N, r.ifName);
+        if (mh !== nh || md !== nd) {
+          adj.mismatch.push({ dev: R.id, nbr: N.id, myIf: i.name, nbrIp: na.ip, nbrRid: nrid, mine: { hello: mh, dead: md }, theirs: { hello: nh, dead: nd }, mask: i.len });
+          continue;
+        }
         adj.push({ dev: R.id, nbr: N.id, myIf: i.name, nbrIf: r.ifName, nbrIp: na.ip, nbrRid: nrid, area: i.area });
       }
     }
@@ -445,6 +484,7 @@ function computeOspf(topo, staticMap) {
   const adj = ospfAdjacencies(topo);
   // двусторонние соседства
   const two = adj.filter((a) => adj.some((b) => b.dev === a.nbr && b.nbr === a.dev && b.myIf === a.nbrIf));
+  const seg = ospfElect(topo, routers, two);
   const stubs = {};
   for (const R of routers) {
     stubs[R.id] = ospfEnabledIfaces(topo, R).map((i) => {
@@ -453,10 +493,12 @@ function computeOspf(topo, staticMap) {
       return { net: netOf(i.ip, len), len, cost: ospfCost(R, i.name), area: i.area };
     });
   }
+  const hopKey = (h) => h.nextHop + '|' + h.exitIf;
+  const mergeHops = (a, b) => { const out = a.slice(); for (const h of b) if (!out.some((x) => hopKey(x) === hopKey(h))) out.push(h); return out.slice(0, 4); };
   const out = {};
   for (const R of routers) {
     const dist = { [R.id]: 0 };
-    const first = { [R.id]: null };
+    const first = { [R.id]: [] };   // первые хопы всех путей с равной стоимостью (ECMP, до 4)
     const done = new Set();
     for (;;) {
       let u = null;
@@ -465,37 +507,124 @@ function computeOspf(topo, staticMap) {
       done.add(u);
       const U = topo.devices[u];
       for (const e of two.filter((a) => a.dev === u)) {
+        if (done.has(e.nbr)) continue;
         const d = dist[u] + ospfCost(U, e.myIf);
-        if (dist[e.nbr] === undefined || d < dist[e.nbr]) {
-          dist[e.nbr] = d;
-          first[e.nbr] = u === R.id ? { nextHop: e.nbrIp, exitIf: e.myIf } : first[u];
-        }
+        const hops = u === R.id ? [{ nextHop: e.nbrIp, exitIf: e.myIf }] : first[u];
+        if (dist[e.nbr] === undefined || d < dist[e.nbr]) { dist[e.nbr] = d; first[e.nbr] = hops.slice(); }
+        else if (d === dist[e.nbr]) first[e.nbr] = mergeHops(first[e.nbr], hops);
       }
     }
     const myAreas = new Set(ospfEnabledIfaces(topo, R).map((i) => String(i.area)));
     const myNets = new Set(l3Ifaces(R).filter((i) => ifUp(topo, R, i.name)).map((i) => netOf(i.ip, i.len) + '/' + i.len));
     const best = new Map();
     for (const X of routers) {
-      if (X.id === R.id || dist[X.id] === undefined) continue;
+      if (X.id === R.id || dist[X.id] === undefined || !first[X.id].length) continue;
       for (const s of stubs[X.id]) {
         const key = s.net + '/' + s.len;
         if (myNets.has(key)) continue;
         const total = dist[X.id] + s.cost;
         const ex = best.get(key);
         if (!ex || total < ex.metric) {
-          best.set(key, { code: myAreas.has(String(s.area)) ? 'O' : 'O IA', net: s.net, len: s.len, ad: AD.O, metric: total, nextHop: first[X.id].nextHop, exitIf: first[X.id].exitIf });
-        }
+          best.set(key, { code: myAreas.has(String(s.area)) ? 'O' : 'O IA', net: s.net, len: s.len, ad: AD.O, metric: total, hops: first[X.id].slice() });
+        } else if (total === ex.metric) ex.hops = mergeHops(ex.hops, first[X.id]);
       }
       const o = X.cfg.ospf;
       if (o.defaultOriginate && (o.defaultAlways || (staticMap[X.id] || []).some((r) => r.len === 0))) {
         const ex = best.get('0/0');
         const m = dist[X.id];
-        if (!ex || m < ex._d) best.set('0/0', { code: 'O*E2', net: 0, len: 0, ad: AD.O, metric: 1, _d: m, nextHop: first[X.id].nextHop, exitIf: first[X.id].exitIf });
+        if (!ex || m < ex._d) best.set('0/0', { code: 'O*E2', net: 0, len: 0, ad: AD.O, metric: 1, _d: m, hops: first[X.id].slice() });
       }
     }
-    out[R.id] = [...best.values()];
+    out[R.id] = [...best.values()].map((r) => {
+      const hops = r.hops.slice().sort((a, b) => a.nextHop - b.nextHop);
+      const route = { ...r, nextHop: hops[0].nextHop, exitIf: hops[0].exitIf };
+      delete route.hops;
+      if (hops.length > 1) route.ecmp = hops;
+      return route;
+    });
   }
-  return { routes: out, adj: two };
+  return { routes: out, adj: two, seg, mismatch: adj.mismatch };
+}
+
+// ---------- DR/BDR ----------
+// Выборы на broadcast-сегменте: priority, затем Router ID. Не вытесняющие: роли хранятся между
+// пересчётами (rt.ospfDr) и меняются, только когда DR/BDR пропал или его процесс сброшен (clear ip ospf process).
+function ospfElect(topo, routers, two) {
+  const rt = netRt(topo);
+  const members = new Map();   // ключ сегмента → [{dev, ifName, ip, len, prio, rid}]
+  for (const R of routers) {
+    const rid = ospfRouterId(topo, R);
+    for (const i of ospfEnabledIfaces(topo, R)) {
+      if (ospfNetType(R, i.name) !== 'BROADCAST') continue;
+      const key = i.area + '|' + intToIp(netOf(i.ip, i.len)) + '/' + i.len;
+      if (!members.has(key)) members.set(key, []);
+      members.get(key).push({ dev: R.id, ifName: i.name, ip: i.ip, len: i.len, prio: ospfPrio(R, i.name), rid, passive: isPassive(R.cfg.ospf, i.name) });
+    }
+  }
+  const segs = [];
+  const mk = (m) => m.dev + '|' + m.ifName;
+  const better = (a, b) => b.prio - a.prio || ipToInt(b.rid) - ipToInt(a.rid);
+  for (const [base, list] of members) {
+    // компоненты связности: кто кого слышит на этом сегменте
+    const parent = new Map(list.map((m) => [mk(m), mk(m)]));
+    const find = (x) => (parent.get(x) === x ? x : find(parent.get(x)));
+    for (const a of two) {
+      const ka = a.dev + '|' + a.myIf, kb = a.nbr + '|' + a.nbrIf;
+      if (parent.has(ka) && parent.has(kb)) parent.set(find(ka), find(kb));
+    }
+    const groups = new Map();
+    for (const m of list) { const r = find(mk(m)); if (!groups.has(r)) groups.set(r, []); groups.get(r).push(m); }
+    const comps = [...groups.values()];
+    for (const comp of comps) {
+      const key = comps.length === 1 ? base : base + '#' + comp.map(mk).sort()[0];
+      const st = rt.ospfDr[key] || (rt.ospfDr[key] = { dr: null, bdr: null });
+      const has = (k) => k && comp.some((m) => mk(m) === k);
+      if (!has(st.dr)) { st.dr = has(st.bdr) ? st.bdr : null; if (st.dr === st.bdr) st.bdr = null; }
+      if (!has(st.bdr)) st.bdr = null;
+      const eligible = comp.filter((m) => m.prio > 0).sort(better);
+      if (!st.dr && eligible.length) { st.dr = mk(eligible[0]); st.bdr = null; }
+      if (!st.bdr) { const c = eligible.find((m) => mk(m) !== st.dr); st.bdr = c ? mk(c) : null; }
+      segs.push({ key, members: comp, dr: st.dr, bdr: st.bdr });
+    }
+  }
+  return segs;
+}
+
+// Роль интерфейса роутера: 'DR' | 'BDR' | 'DROTHER' | 'P2P' | 'LOOP' | null
+function ospfRole(topo, devId, ifName) {
+  const dev = topo.devices[devId];
+  if (!dev || !dev.cfg.ospf) return null;
+  const t = ospfNetType(dev, ifName);
+  if (t === 'LOOPBACK') return 'LOOP';
+  if (t === 'POINT_TO_POINT') return 'P2P';
+  const k = devId + '|' + ifName;
+  const seg = (allRoutes(topo).ospfSeg || []).find((x) => x.members.some((m) => m.dev + '|' + m.ifName === k));
+  if (!seg) return null;
+  return seg.dr === k ? 'DR' : seg.bdr === k ? 'BDR' : 'DROTHER';
+}
+function ospfSegOf(topo, devId, ifName) {
+  const k = devId + '|' + ifName;
+  return (allRoutes(topo).ospfSeg || []).find((x) => x.members.some((m) => m.dev + '|' + m.ifName === k)) || null;
+}
+
+// «Одновременное включение» всех роутеров (загрузка сети, сборка задания): выборы DR/BDR и Router ID — с нуля
+function netBoot(topo) {
+  const rt = netRt(topo);
+  rt.ospfDr = {};
+  rt.ospfRidPin = {};
+  rt.lastSegRoles = null;
+  touch(topo);
+}
+
+// clear ip ospf process: новый Router ID вступает в силу, роли DR/BDR этого роутера освобождаются
+function ospfClearProcess(topo, dev) {
+  const rt = netRt(topo);
+  delete rt.ospfRidPin[dev.id];
+  for (const st of Object.values(rt.ospfDr)) {
+    if (st.dr && st.dr.startsWith(dev.id + '|')) { st.dr = st.bdr; st.bdr = null; }
+    if (st.bdr && st.bdr.startsWith(dev.id + '|')) st.bdr = null;
+  }
+  touch(topo);
 }
 
 function connectedRoutesOf(topo, dev) {
@@ -568,7 +697,7 @@ function allRoutes(topo) {
     }
     tables[R.id] = selectBest(all);
   }
-  rt.routeCache = { rev: topo.rev, tables, ospfAdj: ospf.adj };
+  rt.routeCache = { rev: topo.rev, tables, ospfAdj: ospf.adj, ospfSeg: ospf.seg, ospfMismatch: ospf.mismatch };
   return rt.routeCache;
 }
 
@@ -639,11 +768,12 @@ function deliver(topo, srcDevId, dstIp, ttl, opts = {}) {
     }
     const eg = egressFor(topo, D, dstIp);
     if (!eg) return fail(D.type === 'router' ? 'unreachable' : 'nogw', cur, first ? null : fromIp);
+    if (first) psecObserve(topo, cur, eg.exitIf);   // отправитель «вставил кадр в порт»: порт учит MAC или ловит нарушение
     const r = arpResolve(topo, cur, eg.exitIf, eg.nextHop, eg.proxy);
-    if (opts.events) recordArp(topo, opts, cur, eg, r);
+    if (opts.events && !(r && r.p2p)) recordArp(topo, opts, cur, eg, r);
     if (!r) return fail('arp', cur, first ? null : fromIp);
     let lost = false;
-    if (opts.arp) {
+    if (opts.arp && !r.p2p) {
       const cache = (rt.arp[cur] = rt.arp[cur] || {});
       const key = intToIp(eg.nextHop);
       if (!cache[key] || cache[key].mac !== r.mac) {
@@ -857,6 +987,7 @@ function dhcpRequest(topo, pcId, opts = {}) {
   if (!pc || pc.type !== 'pc') return { ok: false };
   const mac = pc.ports[0].mac;
   if (!portPhysUp(topo, pcId, 'FastEthernet0')) return { ok: false, reason: 'link' };
+  psecObserve(topo, pcId, 'FastEthernet0');
   // широковещательный DISCOVER
   const reach = l2Reach(topo, pcId, 'FastEthernet0');
   if (opts.events) {
@@ -968,6 +1099,7 @@ function netCommit(topo) {
   touch(topo);
   const rt = netRt(topo);
   swGuards(topo); // BPDU Guard и EtherChannel guard выключают порты до DHCP и сообщений о линках
+  psecCommit(topo);
   // ПК в режиме DHCP без адреса пытаются получить его снова
   for (const d of Object.values(topo.devices)) {
     if (d.type === 'pc' && d.cfg.ipMode === 'dhcp' && !hasValidLease(d) && d.cfg.dhcpStatus !== 'released') {
@@ -1003,10 +1135,44 @@ function netCommit(topo) {
       const [devId, rid, ifn] = k.split('|');
       const d = topo.devices[devId];
       if (!d || !d.cfg.ospf) continue;
-      pushConsole(topo, devId, '%OSPF-5-ADJCHG: Process ' + d.cfg.ospf.pid + ', Nbr ' + rid + ' on ' + ifn + ' from FULL to DOWN, Neighbor Down: Interface down or detached');
+      // свой интерфейс жив — значит сосед перестал присылать подходящие Hello (таймеры, area, сосед выключен)
+      const why = d.cfg.interfaces[ifn] && ifUp(topo, d, ifn) ? 'Dead timer expired' : 'Interface down or detached';
+      pushConsole(topo, devId, '%OSPF-5-ADJCHG: Process ' + d.cfg.ospf.pid + ', Nbr ' + rid + ' on ' + ifn + ' from FULL to DOWN, Neighbor Down: ' + why);
     }
   }
   rt.lastOspf = adj;
+  ospfDebugEvents(topo);
+}
+
+// Сообщения debug ip ospf adj / hello (формат упрощён, близко к Packet Tracer)
+function ospfDebugEvents(topo) {
+  const rt = netRt(topo);
+  const all = allRoutes(topo);
+  const roles = {};
+  for (const sg of all.ospfSeg || []) roles[sg.key] = (sg.dr || '') + '>' + (sg.bdr || '');
+  const prev = rt.lastSegRoles || {};
+  const ridOf = (k) => { const [id] = (k || '').split('|'); const d = topo.devices[id]; return d ? ospfRouterId(topo, d) || '0.0.0.0' : '0.0.0.0'; };
+  for (const sg of all.ospfSeg || []) {
+    if (prev[sg.key] === roles[sg.key] || !rt.lastSegRoles) continue;
+    for (const m of sg.members) {
+      if (!(rt.debug[m.dev] || {}).adj) continue;
+      const L = ['OSPF: DR/BDR election on ' + m.ifName];
+      if (sg.bdr) L.push('OSPF: Elect BDR ' + ridOf(sg.bdr));
+      if (sg.dr) L.push('OSPF: Elect DR ' + ridOf(sg.dr));
+      L.push('       DR: ' + ridOf(sg.dr) + ' (Id)   BDR: ' + (sg.bdr ? ridOf(sg.bdr) + ' (Id)' : 'none'));
+      pushConsole(topo, m.dev, L.join('\n'));
+    }
+  }
+  rt.lastSegRoles = roles;
+  const mm = (all.ospfMismatch || []).map((x) => x.dev + '|' + x.myIf + '|' + x.nbrRid);
+  const prevMm = rt.lastMismatch || [];
+  for (const x of all.ospfMismatch || []) {
+    const k = x.dev + '|' + x.myIf + '|' + x.nbrRid;
+    if (prevMm.includes(k) || !(rt.debug[x.dev] || {}).hello) continue;
+    pushConsole(topo, x.dev, 'OSPF: Rcv hello from ' + x.nbrRid + ' area 0 from ' + x.myIf + ' ' + intToIp(x.nbrIp) +
+      '\nOSPF: Mismatched hello parameters from ' + intToIp(x.nbrIp) + '\nOSPF: Dead R ' + x.theirs.dead + ' C ' + x.mine.dead + ', Hello R ' + x.theirs.hello + ' C ' + x.mine.hello + '  Mask R ' + intToIp(lenToMaskInt(x.mask)) + ' C ' + intToIp(lenToMaskInt(x.mask)));
+  }
+  rt.lastMismatch = mm;
 }
 
 function netOnConsole(topo, fn) {

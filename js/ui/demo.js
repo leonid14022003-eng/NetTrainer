@@ -31,6 +31,7 @@ const DemoUI = {
     DevWin.closeAll();
     restoreTopoInPlace(App.sandbox, JSON.stringify(demoBuild(this.demo)));
     _rtMap.delete(App.sandbox);
+    netBoot(App.sandbox);
     Terminal.states.delete(App.sandbox);
     Workspace.selected = null;
     App.undoStacks.sandbox = []; App.redoStacks.sandbox = [];

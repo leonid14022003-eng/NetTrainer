@@ -9,6 +9,22 @@ const FINAL_SIZE = 15;      // вопросов в итоговом тесте
 const QUIZ_PASS = 70;       // проходной балл, %
 
 function lessonDef(spec) { LESSONS.push(spec); }
+// Дополнить готовый урок: новые разделы (after — после раздела с таким английским заголовком), вопросы, генераторы, минуты
+function lessonExtend(id, add) {
+  const l = lessonGet(id);
+  if (!l) throw new Error('lessonExtend: no lesson ' + id);
+  for (const s of add.sections || []) {
+    const at = s.after ? l.sections.findIndex((x) => x.h.en === s.after) : -1;
+    const sec = { h: s.h, blocks: s.blocks };
+    if (at >= 0) l.sections.splice(at + 1, 0, sec); else l.sections.push(sec);
+  }
+  if (add.quiz) l.quiz.push(...add.quiz);
+  if (add.gen) l.gen = (l.gen || []).concat(add.gen);
+  if (add.minutes) l.minutes += add.minutes;
+  if (add.genInQuiz) l.genInQuiz = add.genInQuiz;
+}
+// Раздел для lessonExtend: lSecAt('после этого раздела', [заголовок], блоки…)
+function lSecAt(after, title, ...blocks) { return Object.assign(lSec(title, ...blocks), { after }); }
 function lessonGet(id) { return LESSONS.find((l) => l.id === id) || null; }
 
 // --- карта курса: модуль без готового урока показывается как «скоро» ---

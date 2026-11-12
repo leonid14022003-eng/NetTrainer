@@ -100,7 +100,7 @@ const Physical = {
     for (const l of Object.values(topo.links)) {
       const a = this.portPos(topo, l.a), b = this.portPos(topo, l.b);
       if (!a || !b) continue;
-      const color = l.color || (l.cable === 'console' ? '#5fb4e8' : l.cable === 'cross' ? '#9ccc65' : '#8bc34a');
+      const color = l.color || (l.cable === 'console' ? '#5fb4e8' : l.cable === 'cross' ? '#9ccc65' : l.cable === 'serial' ? '#d32f2f' : '#8bc34a');
       let d;
       if (l.managed) {
         const ex = L.rackX + L.innerW + 30 * z;

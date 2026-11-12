@@ -39,7 +39,8 @@ const App = {
     DevWin.refreshAll();
     Sim.renderPduList();
     clearTimeout(this._stpTimer);
-    const wait = swNextChange(this.topo());
+    const w1 = swNextChange(this.topo()), w2 = psecNextChange(this.topo());
+    const wait = w1 === null ? w2 : w2 === null ? w1 : Math.min(w1, w2);
     if (wait !== null) this._stpTimer = setTimeout(() => this.changed(), wait + 50);
   },
   _saveTimer: null,
@@ -186,7 +187,7 @@ function restoreTopoInPlace(topo, json) {
 function loadTopo(obj) {
   const t = newTopology();
   if (obj && obj.devices) Object.assign(t, obj);
-  touch(t);
+  netBoot(t);
   netCommit(t);
   return t;
 }

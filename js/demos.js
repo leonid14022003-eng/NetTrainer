@@ -121,7 +121,7 @@ demoDef({
 function demoBuild(demo) {
   const topo = newTopology();
   demo.build(topo);
-  touch(topo);
+  netBoot(topo);
   netCommit(topo);
   return topo;
 }

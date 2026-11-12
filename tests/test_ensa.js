@@ -182,7 +182,7 @@ test('ensa: all 14 ENSA modules have lessons, drills and glossary', () => {
     const id = 'ensa' + String(n).padStart(2, '0');
     ok(GLOSSARY.some((g) => g.lesson === id), id + ' has glossary terms');
     ok(INTERVIEW.some((x) => x.lesson === id), id + ' has interview questions');
-    ok(lessonGet(id).sections.length >= 4 && lessonGet(id).sections.length <= 6, id + ' has 4–6 sections');
+    ok(lessonGet(id).sections.length >= 4 && lessonGet(id).sections.length <= 8, id + ' has 4–8 sections');   // ensa02: + ловушки wildcard и поиск неисправностей
   }
   for (const d of ['acl', 'nat', 'ops']) ok(DRILLS.find((x) => x.id === d), 'drill ' + d);
 });
