@@ -85,6 +85,14 @@ const ICON_SPRITE = `
   <path d="M15 22 a6 6 0 0 0 0 10 M31 22 a6 6 0 0 1 0 10 M11.5 19.5 a10 10 0 0 0 0 15 M34.5 19.5 a10 10 0 0 1 0 15" fill="none" stroke="#fff" stroke-width="1.6"/>
   <circle cx="23" cy="27" r="2" fill="#fff"/>
 </symbol>
+<symbol id="i-wrouter" viewBox="0 0 56 46">
+  <path d="M15 17 L13 3 M41 17 L43 3" stroke="#2f6f80" stroke-width="2.4" stroke-linecap="round"/>
+  <polygon points="12,17 52,17 46,23 6,23" fill="url(#gBlueTop)" stroke="#2f6f80"/>
+  <rect x="6" y="23" width="40" height="17" fill="url(#gBlueSide)" stroke="#2f6f80"/>
+  <polygon points="46,23 52,17 52,34 46,40" fill="#2b7286" stroke="#2f6f80"/>
+  <path d="M20 26.5 a5.5 5.5 0 0 0 0 10 M32 26.5 a5.5 5.5 0 0 1 0 10 M16.5 24.5 a9.5 9.5 0 0 0 0 14 M35.5 24.5 a9.5 9.5 0 0 1 0 14" fill="none" stroke="#fff" stroke-width="1.5"/>
+  <circle cx="26" cy="31.5" r="2" fill="#fff"/>
+</symbol>
 <symbol id="i-firewall" viewBox="0 0 52 44">
   <polygon points="17,4 35,4 39,1 21,1" fill="url(#gBlueTop)" stroke="#2f6f80" stroke-width=".8"/>
   <rect x="17" y="4" width="18" height="38" fill="url(#gBlueSide)" stroke="#2f6f80"/>
@@ -215,6 +223,8 @@ function iconUse(id, w, h, extra = '') {
 
 function deviceIconId(dev) {
   const cat = DEVICE_CATALOG[dev.model];
+  if (cat && cat.home) return 'i-wrouter';
+  if (cat && cat.ap) return 'i-ap';
   if (dev.type === 'router') return 'i-router';
   if (dev.type === 'switch') return 'i-switch';
   if (dev.type === 'hub') return 'i-hub';
@@ -223,6 +233,9 @@ function deviceIconId(dev) {
 
 // Размер иконки устройства на логической схеме
 function deviceIconSize(dev) {
+  const cat = DEVICE_CATALOG[dev.model] || {};
+  if (cat.home) return [50, 41];
+  if (cat.ap) return [46, 39];
   if (dev.type === 'router') return [52, 37];
   if (dev.type === 'switch' || dev.type === 'hub') return [54, 34];
   if (dev.model === 'Server') return [30, 38];
@@ -245,7 +258,32 @@ function frontPanel(dev, topo, scale = 1) {
       '<rect x="' + (x + 1.5) + '" y="' + (y + 1) + '" width="2" height="1.4" fill="' + led(name) + '"/><rect x="' + (x + w - 3.5) + '" y="' + (y + 1) + '" width="2" height="1.4" fill="' + led(name) + '"/></g>';
   };
   let w, h, body = '';
-  if (dev.type === 'switch') {
+  if (cat.home) {
+    // Linksys WRT300N: две антенны, порт Internet и четыре порта Ethernet, кнопка питания
+    w = 220; h = 62;
+    body += '<path d="M28 22 L22 2 M192 22 L198 2" stroke="#1b2733" stroke-width="4" stroke-linecap="round"/>';
+    body += '<rect x="4" y="20" width="212" height="40" rx="5" fill="#25374a" stroke="#0d151d"/><rect x="5" y="21" width="210" height="3" rx="2" fill="rgba(255,255,255,.15)"/>';
+    body += '<text x="12" y="34" font-size="6.5" font-weight="bold" fill="#e9eef3">LINKSYS</text><text x="12" y="41" font-size="3.2" fill="#a9b6c2">Wireless-N Broadband Router WRT300N</text>';
+    ['Power', 'WLAN', '1', '2', '3', '4', 'Internet'].forEach((t, i) => {
+      const lx = 14 + i * 9;
+      const on = !dev.off && (i === 0 || i === 1 || (i >= 2 && i <= 5 && portPhysUp(topo, dev.id, 'Ethernet ' + (i - 1))) || (i === 6 && portPhysUp(topo, dev.id, 'Internet')));
+      body += '<circle cx="' + lx + '" cy="49" r="1.4" fill="' + (on ? '#5fe05f' : '#3b3b3b') + '"/><text x="' + lx + '" y="55" font-size="2.4" text-anchor="middle" fill="#b9c5d0">' + t + '</text>';
+    });
+    body += '<rect x="86" y="30" width="22" height="20" rx="1.5" fill="#3a4d63" stroke="#d9b54a" stroke-width=".7"/>' + portJack(91.5, 35, 'Internet', 11, 9) + '<text x="97" y="55" font-size="2.8" text-anchor="middle" fill="#e2c35a">Internet</text>';
+    body += '<rect x="114" y="30" width="72" height="20" rx="1.5" fill="#3a4d63" stroke="#7fa7cf" stroke-width=".7"/>';
+    for (let i = 4; i >= 1; i--) { const x = 118 + (4 - i) * 17; body += portJack(x, 35, 'Ethernet ' + i, 11, 9) + '<text x="' + (x + 5.5) + '" y="55" font-size="2.8" text-anchor="middle" fill="#bcd3ea">' + i + '</text>'; }
+    body += '<text x="150" y="28" font-size="2.8" text-anchor="middle" fill="#bcd3ea">Ethernet</text>';
+    body += '<circle cx="200" cy="40" r="4" fill="#111" stroke="#888" stroke-width=".7"/><text x="200" y="52" font-size="2.6" text-anchor="middle" fill="#b9c5d0">Power</text>';
+  } else if (cat.ap) {
+    // AccessPoint-PT: антенна, один проводной порт Port 0
+    w = 130; h = 54;
+    body += '<path d="M104 18 L110 2" stroke="#1b2733" stroke-width="3.5" stroke-linecap="round"/>';
+    body += '<rect x="4" y="16" width="122" height="36" rx="4" fill="#e6ebef" stroke="#6f767d"/><rect x="5" y="17" width="120" height="3" rx="2" fill="#fff"/>';
+    body += '<text x="12" y="30" font-size="5" font-weight="bold" fill="#2a3540">Access Point</text><text x="12" y="36" font-size="3.2" fill="#4a5560">AccessPoint-PT</text>';
+    body += '<circle cx="14" cy="44" r="1.4" fill="' + (dev.off ? '#555' : '#3fdc4a') + '"/><text x="19" y="45" font-size="2.6" fill="#333">PWR</text>';
+    body += '<circle cx="34" cy="44" r="1.4" fill="' + (!dev.off && (wifiAssoc(topo).clients[dev.id] || []).length ? '#3fdc4a' : '#555') + '"/><text x="39" y="45" font-size="2.6" fill="#333">WLAN</text>';
+    body += portJack(78, 30, 'Port 0', 12, 10) + '<text x="84" y="47" font-size="2.8" text-anchor="middle" fill="#333">Port 0</text>';
+  } else if (dev.type === 'switch') {
     w = 300; h = 34;
     body += '<defs><linearGradient id="swFace" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#e3e6e9"/><stop offset="1" stop-color="#b9bfc5"/></linearGradient></defs>';
     body += '<rect width="300" height="34" rx="2" fill="url(#swFace)" stroke="#6f767d"/><rect x="1" y="1" width="298" height="2" fill="#f6f7f8"/>';
@@ -324,7 +362,7 @@ function frontPanel(dev, topo, scale = 1) {
     w = 90; h = 52;
     body += '<polygon points="10,0 80,0 76,34 14,34" fill="#575d64" stroke="#2a2d31"/><polygon points="14,3 76,3 73,31 17,31" fill="#9bc9e8"/>';
     body += '<polygon points="14,34 76,34 90,48 0,48" fill="#8c939a" stroke="#2a2d31"/>';
-    body += portJack(78, 40, 'FastEthernet0', 8, 6);
+    body += isWirelessClient(dev) ? '<rect x="74" y="38" width="14" height="7" rx="1" fill="#1f2f45" stroke="#0d151d"/><text x="81" y="43" font-size="2.6" text-anchor="middle" fill="#cfe0f2">WPC300N</text>' : portJack(78, 40, 'FastEthernet0', 8, 6);
   } else if (dev.model === 'Printer') {
     w = 70; h = 46;
     body += '<rect x="5" y="10" width="60" height="30" rx="3" fill="#d8d4c8" stroke="#555"/><rect x="15" y="2" width="40" height="10" fill="#fff" stroke="#555"/>';
@@ -339,7 +377,7 @@ function frontPanel(dev, topo, scale = 1) {
     body += '<circle cx="36" cy="38" r="1.1" fill="' + (dev.off ? '#600' : '#3fdc4a') + '"/><circle cx="20" cy="38" r="1.1" fill="#d9a400"/>';
     body += '<rect x="8" y="50" width="40" height="40" rx="1" fill="#4b4f54" stroke="#2c2f33"/>';
     for (let i = 0; i < 6; i++) body += '<path d="M10 ' + (54 + i * 6) + ' h36" stroke="#6d7277" stroke-dasharray="2 1"/>';
-    body += portJack(18, 80, 'FastEthernet0', 10, 7);
+    body += isWirelessClient(dev) ? '<rect x="14" y="78" width="28" height="10" rx="1" fill="#1f2f45" stroke="#0d151d"/><path d="M38 78 L42 64" stroke="#111" stroke-width="2" stroke-linecap="round"/><text x="26" y="85" font-size="3.2" text-anchor="middle" fill="#cfe0f2">WMP300N</text>' : portJack(18, 80, 'FastEthernet0', 10, 7);
   }
   if (dev.off) body += '<rect width="' + w + '" height="' + h + '" fill="#000" opacity=".25"/>';
   return { w: w * scale, h: h * scale, scale, ports: ports.map((p) => ({ ...p, x: p.x * scale, y: p.y * scale })),
@@ -347,6 +385,13 @@ function frontPanel(dev, topo, scale = 1) {
 }
 
 function rearPanel(dev, scale = 1) {
+  const cat = DEVICE_CATALOG[dev.model] || {};
+  if (cat.home || cat.ap) {
+    const w = 160, h = 34;
+    let b = '<rect width="' + w + '" height="' + h + '" rx="3" fill="#2a2e33" stroke="#0e0f11"/><text x="10" y="20" font-size="4" fill="#7e868d">' + escapeHtml(cat.display) + ' — 12V DC</text>';
+    b += '<g class="power-btn" style="cursor:pointer"><rect x="132" y="6" width="14" height="22" rx="2" fill="#111" stroke="#888"/><circle cx="139" cy="12" r="2.4" fill="' + (dev.off ? '#333' : '#5fe05f') + '"/><text x="139" y="25" font-size="5" text-anchor="middle" fill="#ccc">I/O</text></g>';
+    return { w: w * scale, h: h * scale, svg: '<g transform="scale(' + scale + ')">' + b + '</g>' };
+  }
   const w = 300, h = dev.type === 'router' ? 50 : 40;
   let b = '<rect width="' + w + '" height="' + h + '" rx="2" fill="#2a2e33" stroke="#0e0f11"/>';
   b += '<rect x="20" y="12" width="16" height="12" fill="#111" stroke="#5fb4e8"/><text x="28" y="31" font-size="5" text-anchor="middle" fill="#9cd">CONSOLE</text>';

@@ -7,7 +7,7 @@ const PALETTE = [
     { id: 'routers', label: 'Routers', icon: 'i-router', items: [NA('PT8200', 'i-router'), '4331', '4321', NA('IR8340', 'i-router'), '1941', '2901', '2911', NA('819IOX', 'i-router'), NA('819HGW', 'i-router'), NA('829', 'i-router'), NA('1240', 'i-router'), NA('PT-Router', 'i-router'), NA('PT-Empty', 'i-router'), NA('1841', 'i-router'), NA('2620XM', 'i-router'), NA('2621XM', 'i-router'), NA('2811', 'i-router')] },
     { id: 'switches', label: 'Switches', icon: 'i-switch', items: ['2960', NA('PT-Switch', 'i-switch'), NA('PT-Empty', 'i-switch'), NA('3560-24PS', 'i-switch'), NA('3650-24PS', 'i-switch'), NA('IE 2000', 'i-switch'), NA('PT-Bridge', 'i-switch'), '2950-24', '2950T'] },
     { id: 'hubs', label: 'Hubs', icon: 'i-hub', items: ['PT-Hub', NA('PT-Repeater', 'i-hub'), NA('Coaxial Splitter', 'i-modem')] },
-    { id: 'wireless', label: 'Wireless Devices', icon: 'i-ap', items: [NA('Meraki', 'i-ap'), NA('LAP-PT', 'i-ap'), NA('3702i', 'i-ap'), NA('WLC-PT', 'i-ap'), NA('3504', 'i-modem'), NA('2504', 'i-modem'), NA('Home Router', 'i-ap'), NA('AP-PT', 'i-ap'), NA('AP-PT-A', 'i-ap')] },
+    { id: 'wireless', label: 'Wireless Devices', icon: 'i-ap', items: [NA('Meraki', 'i-ap'), NA('LAP-PT', 'i-ap'), NA('3702i', 'i-ap'), NA('WLC-PT', 'i-ap'), NA('3504', 'i-modem'), NA('2504', 'i-modem'), NA('Home Router', 'i-wrouter'), 'WRT300N', 'AccessPoint-PT', NA('AP-PT-A', 'i-ap'), NA('AP-PT-AC', 'i-ap'), NA('AP-PT-N', 'i-ap')] },
     { id: 'security', label: 'Security', icon: 'i-firewall', items: [NA('5506', 'i-firewall'), NA('5505', 'i-firewall')] },
     { id: 'wan', label: 'WAN Emulation', icon: 'i-cloud', items: [NA('PT-Cloud', 'i-cloud'), NA('PT-Empty', 'i-cloud'), NA('DSL Modem', 'i-modem'), NA('Cable Modem', 'i-modem')] },
   ] },

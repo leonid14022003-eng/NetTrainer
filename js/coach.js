@@ -4,6 +4,31 @@
 
 // ---------- Пояснения к командам IOS ----------
 const CMD_NOTES = [
+  // ACL
+  [/^access-list (\d+) remark (.+)/, (m) => T('A comment in ACL ' + m[1] + ' — it filters nothing, it only explains the lines.', 'Комментарий в ACL ' + m[1] + ' — ничего не фильтрует, только поясняет строки.', 'הערה ב-ACL ' + m[1] + ' — לא מסננת כלום, רק מסבירה את השורות.')],
+  [/^access-list (\d+) (permit|deny) (.+)/, (m) => { const n = Number(m[1]), std = n < 100 || (n >= 1300 && n < 2000); const a = m[2] === 'permit';
+    return T('Adds a line to ' + (std ? 'standard' : 'extended') + ' ACL ' + n + ': ' + (a ? 'permit' : 'drop') + ' packets matching "' + m[3] + '"' + (std ? ' (a standard ACL looks only at the source address)' : '') + '. Lines are checked top-down, the first match wins; an invisible "deny any" ends the list.',
+      'Добавляет строку в ' + (std ? 'стандартный' : 'расширенный') + ' ACL ' + n + ': ' + (a ? 'разрешить' : 'отбросить') + ' пакеты, подходящие под "' + m[3] + '"' + (std ? ' (стандартный ACL смотрит только на адрес источника)' : '') + '. Строки проверяются сверху вниз, срабатывает первая подходящая; в конце — невидимый "deny any".',
+      'מוסיף שורה ל-ACL ' + (std ? 'סטנדרטי' : 'מורחב') + ' ' + n + ': ' + (a ? 'להתיר' : 'לזרוק') + ' חבילות שמתאימות ל-"' + m[3] + '"' + (std ? ' (ACL סטנדרטי בודק רק את כתובת המקור)' : '') + '. השורות נבדקות מלמעלה למטה, ההתאמה הראשונה קובעת; בסוף יש "deny any" בלתי נראה.'); }],
+  [/^no access-list (\d+)/, (m) => T('Deletes the WHOLE ACL ' + m[1] + ' (all its lines), not one line.', 'Удаляет ВЕСЬ ACL ' + m[1] + ' (все строки), а не одну строку.', 'מוחק את כל ה-ACL ‏' + m[1] + ' (כל השורות), לא שורה אחת.')],
+  [/^ip access-list (standard|extended) (\S+)/, (m) => T('Create or edit the named ' + m[1] + ' ACL "' + m[2] + '" (prompt config-' + (m[1] === 'standard' ? 'std' : 'ext') + '-nacl). Lines get numbers 10, 20, 30… and can be inserted or deleted one by one.', 'Создать или изменить именованный ' + (m[1] === 'standard' ? 'стандартный' : 'расширенный') + ' ACL "' + m[2] + '" (режим config-' + (m[1] === 'standard' ? 'std' : 'ext') + '-nacl). Строки получают номера 10, 20, 30… и их можно вставлять и удалять по одной.', 'יצירה או עריכה של ACL ' + (m[1] === 'standard' ? 'סטנדרטי' : 'מורחב') + ' בשם "' + m[2] + '" (מצב config-' + (m[1] === 'standard' ? 'std' : 'ext') + '-nacl). השורות מקבלות מספרים 10, 20, 30… ואפשר להכניס ולמחוק אותן אחת-אחת.')],
+  [/^(\d+) (permit|deny) (.+)/, (m) => T('Line number ' + m[1] + ': ' + (m[2] === 'permit' ? 'permit' : 'drop') + ' "' + m[3] + '". The number puts it exactly between the existing lines.', 'Строка с номером ' + m[1] + ': ' + (m[2] === 'permit' ? 'разрешить' : 'отбросить') + ' "' + m[3] + '". Номер ставит её точно между существующими строками.', 'שורה מספר ' + m[1] + ': ' + (m[2] === 'permit' ? 'להתיר' : 'לזרוק') + ' "' + m[3] + '". המספר ממקם אותה בדיוק בין השורות הקיימות.')],
+  [/^(permit|deny) (.+)/, (m) => T('Next line of this ACL: ' + (m[1] === 'permit' ? 'permit' : 'drop') + ' "' + m[2] + '" (gets the next number, +10).', 'Следующая строка этого ACL: ' + (m[1] === 'permit' ? 'разрешить' : 'отбросить') + ' "' + m[2] + '" (получит следующий номер, +10).', 'השורה הבאה ב-ACL הזה: ' + (m[1] === 'permit' ? 'להתיר' : 'לזרוק') + ' "' + m[2] + '" (מקבלת את המספר הבא, ‎+10).')],
+  [/^no (\d+)$/, (m) => T('Delete line ' + m[1] + ' of this ACL; the other lines stay.', 'Удалить строку ' + m[1] + ' этого ACL; остальные строки остаются.', 'מחיקת שורה ' + m[1] + ' ב-ACL הזה; שאר השורות נשארות.')],
+  [/^remark (.+)/, () => T('A comment inside the ACL.', 'Комментарий внутри ACL.', 'הערה בתוך ה-ACL.')],
+  [/^ip access-group (\S+) (in|out)/, (m) => T('Apply ACL ' + m[1] + ' to this interface for ' + (m[2] === 'in' ? 'packets coming IN (before routing)' : 'packets going OUT (after routing)') + '. One ACL per interface, per direction.', 'Применить ACL ' + m[1] + ' к этому интерфейсу для ' + (m[2] === 'in' ? 'ВХОДЯЩИХ пакетов (до маршрутизации)' : 'ИСХОДЯЩИХ пакетов (после маршрутизации)') + '. Один ACL на интерфейс в каждом направлении.', 'החלת ACL ‏' + m[1] + ' על הממשק הזה עבור ' + (m[2] === 'in' ? 'חבילות נכנסות (לפני הניתוב)' : 'חבילות יוצאות (אחרי הניתוב)') + '. ‏ACL אחד לממשק בכל כיוון.')],
+  [/^no ip access-group (\S+) (in|out)/, (m) => T('Remove ACL ' + m[1] + ' from this interface (' + m[2] + '); the ACL itself stays in the configuration.', 'Снять ACL ' + m[1] + ' с этого интерфейса (' + m[2] + '); сам ACL остаётся в конфигурации.', 'הסרת ACL ‏' + m[1] + ' מהממשק (' + m[2] + '); ה-ACL עצמו נשאר בתצורה.')],
+  [/^access-class (\S+) in/, (m) => T('Only hosts permitted by ACL ' + m[1] + ' may log in to these vty lines (Telnet/SSH). Transit traffic is not affected.', 'Входить на эти линии vty (Telnet/SSH) могут только хосты, разрешённые ACL ' + m[1] + '. Транзитный трафик не затрагивается.', 'רק מארחים ש-ACL ‏' + m[1] + ' מתיר יכולים להתחבר לקווי ה-vty האלה (Telnet/SSH). תעבורה עוברת לא מושפעת.')],
+  [/^transport input (\S+)/, (m) => T('Protocols allowed on these lines: ' + m[1] + '.', 'Разрешённые на линиях протоколы: ' + m[1] + '.', 'הפרוטוקולים המותרים בקווים: ' + m[1] + '.')],
+  // NAT
+  [/^ip nat inside$/, () => T('This interface faces the private LAN (inside): packets from here get their source translated on the way out.', 'Этот интерфейс смотрит в частную LAN (inside): у пакетов отсюда на выходе подменяется адрес источника.', 'הממשק הזה פונה ל-LAN הפרטית (inside): לחבילות מכאן מתורגמת כתובת המקור ביציאה.')],
+  [/^ip nat outside$/, () => T('This interface faces the provider (outside): translations happen when packets cross between inside and outside.', 'Этот интерфейс смотрит к провайдеру (outside): трансляция происходит, когда пакет переходит между inside и outside.', 'הממשק הזה פונה לספק (outside): התרגום קורה כשחבילה עוברת בין inside ל-outside.')],
+  [/^no ip nat (inside|outside)$/, (m) => T('Remove the "' + m[1] + '" mark from this interface.', 'Снять метку "' + m[1] + '" с этого интерфейса.', 'הסרת הסימון "' + m[1] + '" מהממשק.')],
+  [/^ip nat pool (\S+) (\S+) (\S+)/, (m) => T('Pool ' + m[1] + ' of public addresses (inside global) ' + m[2] + ' – ' + m[3] + '.', 'Пул ' + m[1] + ' публичных адресов (inside global) ' + m[2] + ' – ' + m[3] + '.', 'מאגר ' + m[1] + ' של כתובות ציבוריות (inside global) ‏' + m[2] + ' – ' + m[3] + '.')],
+  [/^ip nat inside source list (\S+) interface (\S+) overload/, (m) => T('PAT: hosts permitted by ACL ' + m[1] + ' go out with the address of ' + m[2] + '; "overload" lets them all share it, told apart by port numbers.', 'PAT: хосты, разрешённые ACL ' + m[1] + ', выходят под адресом ' + m[2] + '; "overload" позволяет всем делить его, различая по номерам портов.', 'PAT: מארחים ש-ACL ‏' + m[1] + ' מתיר יוצאים עם הכתובת של ' + m[2] + '; ‏"overload" מאפשר לכולם לחלוק אותה, לפי מספרי פורטים.')],
+  [/^ip nat inside source list (\S+) pool (\S+) overload/, (m) => T('PAT with pool ' + m[2] + ': hosts of ACL ' + m[1] + ' share the pool addresses, told apart by ports.', 'PAT с пулом ' + m[2] + ': хосты из ACL ' + m[1] + ' делят адреса пула, различаясь портами.', 'PAT עם המאגר ' + m[2] + ': המארחים של ACL ‏' + m[1] + ' חולקים את כתובות המאגר, לפי פורטים.')],
+  [/^ip nat inside source list (\S+) pool (\S+)$/, (m) => T('Dynamic NAT: every host permitted by ACL ' + m[1] + ' takes one free address of pool ' + m[2] + ' while it talks.', 'Динамический NAT: каждый хост, разрешённый ACL ' + m[1] + ', занимает на время работы один свободный адрес пула ' + m[2] + '.', 'NAT דינמי: כל מארח ש-ACL ‏' + m[1] + ' מתיר תופס כתובת פנויה אחת מהמאגר ' + m[2] + ' בזמן שהוא מתקשר.')],
+  [/^ip nat inside source static (\S+) (\S+)$/, (m) => T('Static NAT: ' + m[1] + ' always appears outside as ' + m[2] + ' — and outside hosts can reach it at ' + m[2] + '.', 'Статический NAT: ' + m[1] + ' всегда виден снаружи как ' + m[2] + ' — и снаружи до него можно достучаться по ' + m[2] + '.', 'NAT סטטי: ‏' + m[1] + ' תמיד נראה מבחוץ כ-' + m[2] + ' — ומבחוץ אפשר להגיע אליו בכתובת ' + m[2] + '.')],
   // Spanning Tree и EtherChannel
   [/^spanning-tree vlan (\S+) root primary/, (m) => T('Make this switch the root for VLAN ' + m[1] + ': IOS sets priority 24576 (or 4096 below the current root).', 'Сделать этот коммутатор корнем для VLAN ' + m[1] + ': IOS ставит приоритет 24576 (или на 4096 ниже нынешнего корня).', 'להפוך את המתג הזה ל-root של VLAN ' + m[1] + ': ה-IOS קובע priority ‏24576 (או 4096 פחות מה-root הנוכחי).')],
   [/^spanning-tree vlan (\S+) root secondary/, (m) => T('Backup root for VLAN ' + m[1] + ': priority 28672 — it takes over if the root fails.', 'Резервный корень для VLAN ' + m[1] + ': приоритет 28672 — заменит корень, если тот откажет.', 'root גיבוי ל-VLAN ' + m[1] + ': ‏priority ‏28672 — מחליף את ה-root אם הוא נופל.')],
@@ -202,6 +227,20 @@ const CHK_INFO = {
   saved: ['itn02', 'Changes live in RAM (running-config) until saved to NVRAM (startup-config).', 'Изменения живут в RAM (running-config), пока не сохранены в NVRAM (startup-config).', 'השינויים נמצאים ב-RAM ‏(running-config) עד ששומרים אותם ב-NVRAM ‏(startup-config).'],
   svi: ['itn02', 'A Layer 2 switch gets its management IP on "interface vlan 1", and that interface must be up.', 'Коммутатор 2-го уровня получает IP для управления на «interface vlan 1», и этот интерфейс должен быть включён.', 'מתג שכבה 2 מקבל כתובת ניהול ב-"interface vlan 1", והממשק הזה חייב להיות פעיל.'],
   swGateway: ['itn10', 'The switch needs a default gateway to answer management traffic from other networks.', 'Коммутатору нужен шлюз, чтобы отвечать на управление из других сетей.', 'המתג צריך שער ברירת מחדל כדי לענות לתעבורת ניהול מרשתות אחרות.'],
+  aclApplied: ['ensa05', 'An ACL filters nothing until "ip access-group" puts it on an interface in a direction. Standard ACLs (source only) go close to the destination, extended ACLs close to the source.', 'ACL ничего не фильтрует, пока "ip access-group" не поставит его на интерфейс в нужном направлении. Стандартный ACL (только источник) ставят у получателя, расширенный — у источника.', 'ACL לא מסנן כלום עד ש-"ip access-group" מחיל אותו על ממשק בכיוון מסוים. ‏ACL סטנדרטי (רק מקור) ממקמים ליד היעד, ‏ACL מורחב — ליד המקור.'],
+  aclEntry: ['ensa05', 'In a named ACL every line has a sequence number: "15 deny …" inserts between 10 and 20, "no 10" deletes line 10 — no need to retype the whole list.', 'В именованном ACL у каждой строки есть номер: "15 deny …" вставляет между 10 и 20, "no 10" удаляет строку 10 — весь список перепечатывать не нужно.', 'ב-ACL עם שם לכל שורה יש מספר: ‏"15 deny …" מכניס בין 10 ל-20, ‏"no 10" מוחק את שורה 10 — לא צריך להקליד את כל הרשימה מחדש.'],
+  flow: ['ensa05', 'An extended ACL can tell services apart by protocol and port (tcp eq 80 = HTTP). The first matching line decides, and an invisible "deny any" ends every ACL.', 'Расширенный ACL различает службы по протоколу и порту (tcp eq 80 = HTTP). Решает первая подходящая строка, а в конце каждого ACL — невидимый "deny any".', 'ACL מורחב מבחין בין שירותים לפי פרוטוקול ופורט (tcp eq 80 = HTTP). השורה הראשונה שמתאימה קובעת, ובסוף כל ACL יש "deny any" בלתי נראה.'],
+  vtyClass: ['ensa05', 'Remote logins are filtered on the vty lines with "access-class <acl> in" — "ip access-group" works only on interfaces.', 'Удалённые входы фильтруются на линиях vty командой "access-class <acl> in" — "ip access-group" работает только на интерфейсах.', 'התחברויות מרחוק מסוננות בקווי ה-vty עם "access-class <acl> in" — ‏"ip access-group" עובד רק על ממשקים.'],
+  remote: ['ensa05', 'Telnet/SSH to a router needs a reachable address, vty lines with login and a password, and — if an access-class is set — the client must be permitted by it.', 'Для Telnet/SSH к роутеру нужны достижимый адрес, линии vty с login и паролем, а если задан access-class — клиент должен быть им разрешён.', 'Telnet/SSH לנתב צריך כתובת נגישה, קווי vty עם login וסיסמה, ואם מוגדר access-class — הלקוח חייב להיות מותר בו.'],
+  natIf: ['ensa06', 'NAT translates only packets that cross from an "ip nat inside" interface to an "ip nat outside" one (and back). Without both marks nothing is translated.', 'NAT транслирует только пакеты, которые переходят с интерфейса "ip nat inside" на "ip nat outside" (и обратно). Без обеих меток ничего не транслируется.', 'NAT מתרגם רק חבילות שעוברות מממשק "ip nat inside" לממשק "ip nat outside" (ובחזרה). בלי שני הסימונים לא מתורגם כלום.'],
+  natStatic: ['ensa06', 'Static NAT maps one inside local address to one inside global address permanently — used for servers that must be reachable from the Internet.', 'Статический NAT навсегда связывает один inside local с одним inside global — так публикуют серверы, доступные из Интернета.', 'NAT סטטי ממפה כתובת inside local אחת לכתובת inside global אחת לצמיתות — כך מפרסמים שרתים שצריכים להיות נגישים מהאינטרנט.'],
+  natPool: ['ensa06', 'Dynamic NAT takes public addresses from a pool; the pool, the ACL of inside hosts and "ip nat inside source list … pool …" work together.', 'Динамический NAT берёт публичные адреса из пула; работают вместе пул, ACL внутренних хостов и "ip nat inside source list … pool …".', 'NAT דינמי לוקח כתובות ציבוריות ממאגר; המאגר, ה-ACL של המארחים הפנימיים ו-"ip nat inside source list … pool …" עובדים יחד.'],
+  natSeen: ['ensa06', 'Private addresses are not routed on the Internet: the provider has no route back to them. NAT/PAT replaces the source with a public address so the reply can come back.', 'Частные адреса в Интернете не маршрутизируются: у провайдера нет пути обратно к ним. NAT/PAT подменяет источник публичным адресом, чтобы ответ смог вернуться.', 'כתובות פרטיות לא מנותבות באינטרנט: לספק אין דרך חזרה אליהן. ‏NAT/PAT מחליף את המקור בכתובת ציבורית כדי שהתשובה תוכל לחזור.'],
+  homeLan: ['srwe13', 'The Router IP of a home router is the gateway and the DHCP server of the LAN; its DHCP range is computed from it.', 'Router IP домашнего роутера — шлюз и DHCP-сервер для LAN; диапазон DHCP считается от него.', 'ה-Router IP של נתב ביתי הוא השער ושרת ה-DHCP של ה-LAN; טווח ה-DHCP מחושב ממנו.'],
+  homeDhcp: ['srwe13', 'The home router gives addresses from Start IP to Start + Maximum users − 1; everything else in the subnet stays for static addresses.', 'Домашний роутер раздаёт адреса от Start IP до Start + Maximum users − 1; остальное в подсети остаётся для статических адресов.', 'הנתב הביתי מחלק כתובות מ-Start IP עד Start + Maximum users − 1; שאר תת-הרשת נשאר לכתובות סטטיות.'],
+  wifiAp: ['srwe13', 'The SSID names the network; WPA2-Personal (PSK, AES) protects it with a passphrase of 8–63 characters. An open network lets anyone in.', 'SSID — имя сети; WPA2-Personal (PSK, AES) защищает её паролем из 8–63 символов. Открытая сеть пускает любого.', 'ה-SSID הוא שם הרשת; ‏WPA2-Personal ‏(PSK, ‏AES) מגן עליה בסיסמה של 8–63 תווים. רשת פתוחה מכניסה כל אחד.'],
+  wifiNic: ['srwe13', 'A Packet Tracer PC or laptop has no Wi-Fi by default: replace the Fast Ethernet module with a wireless one (WMP300N / WPC300N) while the power is off.', 'У ПК и ноутбука в Packet Tracer по умолчанию нет Wi-Fi: замените модуль Fast Ethernet на беспроводной (WMP300N / WPC300N) при выключенном питании.', 'למחשב ולמחשב נייד ב-Packet Tracer אין Wi-Fi כברירת מחדל: מחליפים את מודול ה-Fast Ethernet במודול אלחוטי (WMP300N / WPC300N) כשהחשמל כבוי.'],
+  wifiAssoc: ['srwe13', 'A client associates only if the SSID, the security mode and the key match the access point exactly.', 'Клиент подключается, только если SSID, тип защиты и ключ точно совпадают с точкой доступа.', 'לקוח מתחבר רק אם ה-SSID, סוג האבטחה והמפתח תואמים בדיוק לנקודת הגישה.'],
   ssh: ['itn16', 'SSH needs a domain name, RSA keys, a local user, and vty lines with "login local" and "transport input ssh".', 'Для SSH нужны доменное имя, RSA-ключи, локальный пользователь и линии vty с «login local» и «transport input ssh».', 'SSH צריך שם דומיין, מפתחות RSA, משתמש מקומי וקווי vty עם "login local" ו-"transport input ssh".'],
 };
 
@@ -259,6 +298,21 @@ const CHK_FIX = {
   saved: (dev) => [{ dev, via: 'exec', lines: ['copy running-config startup-config'] }],
   svi: (dev, ip, mask) => [fxCli(dev, ['interface vlan 1', 'ip address ' + ip + ' ' + mask, 'no shutdown'])],
   swGateway: (dev, gw) => [fxCli(dev, ['ip default-gateway ' + gw])],
+  aclApplied: (dev, ifn, dir, name) => [fxSol([dev], /access-list|access-group/, fxCli(dev, ['interface ' + ifn, 'ip access-group ' + name + ' ' + dir]))],
+  aclEntry: (dev, name) => [fxSol([dev], /access-list/, fxCli(dev, ['ip access-list standard ' + name]))],
+  flow: (a, b, ip, proto, port) => [fxSol(null, /access-list|access-group|ip nat|^ip route/, fxGui(a, ['Desktop → Web Browser → http://' + ip])), fxGui(a, ['Desktop → Web Browser → ' + (port === 443 ? 'https' : 'http') + '://' + ip])],
+  vtyClass: (dev, name) => [fxSol([dev], /access-list|^line vty|access-class/, fxCli(dev, ['line vty 0 4', 'access-class ' + name + ' in']))],
+  remote: (src, dev, ip, kind) => [fxSol([dev], /access-list|^line vty|access-class/, fxCli(dev, ['line vty 0 4', 'password cisco', 'login'])), fxGui(src, ['Desktop → Command Prompt → ' + (kind === 'ssh' ? 'ssh -l <user> ' : 'telnet ') + ip])],
+  natIf: (dev, ifn, role) => [fxCli(dev, ['interface ' + ifn, 'ip nat ' + role])],
+  natStatic: (dev, il, ig) => [fxCli(dev, ['ip nat inside source static ' + il + ' ' + ig])],
+  natPool: (dev, name, a, b) => [fxSol([dev], /^ip nat pool/, fxCli(dev, ['ip nat pool ' + name + ' ' + a + ' ' + b + ' netmask 255.255.255.0']))],
+  natSeen: (src, ip) => [fxSol(null, /ip nat|access-list/, fxGui(src, ['Desktop → Command Prompt → ping ' + ip])), fxGui(src, ['Desktop → Command Prompt → ping ' + ip])],
+  homeLan: (dev, ip, mask) => [fxGui(dev, ['GUI → Setup → Basic Setup → Router IP: ' + ip + ' / ' + mask, 'Save Settings'])],
+  homeDhcp: (dev, start, max) => [fxGui(dev, ['GUI → Setup → Basic Setup → DHCP Server: Enabled', 'Start IP Address: .' + start + ', Maximum number of Users: ' + max, 'Save Settings'])],
+  wifiAp: (dev, ssid, sec, pass, ch, isAp) => [fxGui(dev, isAp ? ['Config → Port 1', 'SSID: ' + ssid, ch ? '2.4 GHz Channel: ' + ch : null, 'Authentication: ' + WIFI_SECURITY[sec], sec !== 'disabled' ? 'PSK Pass Phrase: ' + pass : null]
+    : ['GUI → Wireless → Basic Wireless Settings → Network Name (SSID): ' + ssid + ' → Save Settings', 'GUI → Wireless → Wireless Security → ' + (sec === 'wpa2' ? 'WPA2 Personal' : WIFI_SECURITY[sec]) + (sec !== 'disabled' ? ', Passphrase: ' + pass : '') + ' → Save Settings'])],
+  wifiNic: (dev, module) => [fxGui(dev, ['Physical → power OFF', 'MODULES → ' + module + ' → Install ' + module, 'Physical → power ON'])],
+  wifiAssoc: (pc) => [fxGui(pc, ['Desktop → PC Wireless → Connect → choose the SSID → Connect', 'Pre-shared Key → Connect  (or Config → Wireless0)'])],
   ssh: (dev, user, domain) => [fxSol([dev], /^(ip domain-name|crypto key|username|ip ssh|line vty)/, fxCli(dev, ['ip domain-name ' + domain, 'crypto key generate rsa general-keys modulus 1024', 'username ' + user + ' secret <password>', 'line vty 0 4', 'login local', 'transport input ssh']))],
 };
 
@@ -269,8 +323,8 @@ for (const k of Object.keys(CHK)) {
 }
 
 // Строки решения, относящиеся к проверке: блоки «режим + команды внутри» (interface …, router …, vlan …).
-const SUBMODE_RE = /^(interface |vlan \d|router |ip dhcp pool |line |spanning-tree mst configuration)/;
-const CHILD_RE = /^(no )?(revision|instance |channel-group|channel-protocol|spanning-tree|ip address|shutdown|description|switchport|encapsulation|ip helper-address|name |network |default-router|dns-server|version|auto-summary|passive-interface|router-id|default-information|password|login|transport|exec-timeout|ipv6 address|ip ospf|bandwidth|duplex|speed|lease|auto-cost|clock rate|do )/;
+const SUBMODE_RE = /^(interface |vlan \d|router |ip dhcp pool |line |spanning-tree mst configuration|ip access-list )/;
+const CHILD_RE = /^(no )?(revision|instance |channel-group|channel-protocol|spanning-tree|ip address|shutdown|description|switchport|encapsulation|ip helper-address|name |network |default-router|dns-server|version|auto-summary|passive-interface|router-id|default-information|password|login|transport|exec-timeout|ipv6 address|ip ospf|bandwidth|duplex|speed|lease|auto-cost|clock rate|do |\d+ (permit|deny)|permit |deny |remark |\d+$|ip access-group|access-class|ip nat (inside|outside)$)/;
 function solExtract(task, devs, re) {
   const out = [];
   for (const [dev, cmds] of Object.entries((task.solution && task.solution.cli) || {})) {
@@ -306,11 +360,13 @@ function checkDetails(check, task, topo) {
       const l = findLinkBetween(topo, a, ap, b, bp);
       const off = l && linkCableOk(topo, l) ? [[a, ap], [b, bp]].filter(([d, p]) => { const ic = topo.devices[d].cfg.interfaces && topo.devices[d].cfg.interfaces[p]; return ic && ic.shutdown; }) : [];
       if (off.length) for (const [d, p] of off) blocks.push(fxCli(d, ['interface ' + p, 'no shutdown'])); // кабель верный — просто выключен порт
-      else blocks.push({ dev: a + ' ↔ ' + b, via: 'cable', lines: ['Connections (⚡) → ' + cableName(topo, a, b), a + ': ' + ap, b + ': ' + bp] });
+      else blocks.push({ dev: a + ' ↔ ' + b, via: 'cable', lines: ['Connections (⚡) → ' + cableName(topo, a, b, ap, bp), a + ': ' + ap, b + ': ' + bp] });
     } else if (f.ping) {
       const [a, , ip, expect] = f.ping;
+      const aclTask = task.solution && task.solution.cli && Object.values(task.solution.cli).some((c) => c.some((l) => /access-(list|group|class)/.test(l)));
       if (task.faults && task.solution && task.solution.cli) blocks.push(...solExtract(task, null, /./));
-      else blocks.push({ dev: a, via: 'note', lines: [expect ? T('Fix the red items above first — then ping works by itself.', 'Сначала исправьте красные пункты выше — тогда ping заработает сам.', 'קודם מתקנים את הסעיפים האדומים למעלה — ואז ה-ping יעבוד לבד.') : T('Put the devices into different VLANs or networks so they are isolated.', 'Разнесите устройства по разным VLAN или сетям, чтобы изолировать их.', 'מפרידים את ההתקנים ל-VLAN או לרשתות שונות כדי לבודד אותם.')] });
+      else if (!expect && aclTask) blocks.push(...solExtract(task, null, /access-list|access-group|access-class/));
+      else if (!(!expect && aclTask)) blocks.push({ dev: a, via: 'note', lines: [expect ? T('Fix the red items above first — then ping works by itself.', 'Сначала исправьте красные пункты выше — тогда ping заработает сам.', 'קודם מתקנים את הסעיפים האדומים למעלה — ואז ה-ping יעבוד לבד.') : T('Put the devices into different VLANs or networks so they are isolated.', 'Разнесите устройства по разным VLAN или сетям, чтобы изолировать их.', 'מפרידים את ההתקנים ל-VLAN או לרשתות שונות כדי לבודד אותם.')] });
       blocks.push({ dev: a, via: 'gui', lines: ['Desktop → Command Prompt → ping ' + ip] });
     } else if (f.sol) {
       const got = solExtract(task, f.sol.devs, f.sol.re);
@@ -327,6 +383,9 @@ function checkDetails(check, task, topo) {
 // ---------- Пошаговое решение ----------
 const CLI_TOPICS = [
   [/^interface .*\.\d|^encapsulation/, T('subinterfaces', 'подынтерфейсы', 'תת-ממשקים')],
+  [/access-list|access-group|^(\d+ )?(permit|deny) |^no \d+$/, T('ACL', 'ACL', 'ACL')],
+  [/access-class/, T('VTY access', 'доступ к VTY', 'גישה ל-VTY')],
+  [/^(no )?ip nat/, T('NAT', 'NAT', 'NAT')],
   [/^(interface|ip address|no shutdown)/, T('interfaces', 'интерфейсы', 'ממשקים')],
   [/ip route/, T('static routes', 'статические маршруты', 'נתיבים סטטיים')],
   [/^(vlan|name |switchport access|switchport mode access)/, T('VLANs and access ports', 'VLAN и access-порты', 'VLAN ופורטי access')],
@@ -359,11 +418,11 @@ function linkStep(a, ap, b, bp, relink) {
     kind: 'cable',
     title: T((relink ? 'Re-cable ' : 'Connect ') + a + ' ' + sh(ap) + ' ↔ ' + b + ' ' + sh(bp), (relink ? 'Переподключить ' : 'Соединить ') + a + ' ' + sh(ap) + ' ↔ ' + b + ' ' + sh(bp), (relink ? 'חיבור מחדש ' : 'חיבור ') + a + ' ' + sh(ap) + ' ↔ ' + b + ' ' + sh(bp)),
     explain(topo) {
-      const cross = correctCable(topo.devices[a], topo.devices[b]) === 'cross';
+      const cross = correctCable(topo.devices[a], topo.devices[b], ap, bp) === 'cross';
       return cross ? T(a + ' and ' + b + ' are the same kind of device for cabling → Copper Cross-Over.', a + ' и ' + b + ' — однотипные для кабеля устройства → перекрёстный (Copper Cross-Over).', a + ' ו-' + b + ' הם התקנים מאותו סוג מבחינת כבילה → כבל מוצלב (Copper Cross-Over).')
         : T(a + ' and ' + b + ' are different kinds of devices → Copper Straight-Through.', a + ' и ' + b + ' — разные типы устройств → прямой кабель (Copper Straight-Through).', a + ' ו-' + b + ' הם סוגי התקנים שונים → כבל ישר (Copper Straight-Through).');
     },
-    lines(topo) { return [{ via: 'cable', dev: a + ' ↔ ' + b, lines: ['Connections (⚡) → ' + cableName(topo, a, b), a + ': ' + ap, b + ': ' + bp].map((x) => ({ text: x, note: null })) }]; },
+    lines(topo) { return [{ via: 'cable', dev: a + ' ↔ ' + b, lines: ['Connections (⚡) → ' + cableName(topo, a, b, ap, bp), a + ': ' + ap, b + ': ' + bp].map((x) => ({ text: x, note: null })) }]; },
     apply(topo) {
       if (relink) { const l = findLinkBetween(topo, a, ap, b, bp); if (l) removeLink(topo, l.id); }
       if (!findLinkBetween(topo, a, ap, b, bp)) {
@@ -372,6 +431,20 @@ function linkStep(a, ap, b, bp, relink) {
       }
       netCommit(topo);
     },
+  };
+}
+
+// Шаг решения для Wi-Fi: GUI роутера WRT300N, Config точки доступа, модуль и подключение клиента
+function wifiSolutionStep(d, w) {
+  const T3 = {
+    home: [T(d + ' — GUI: LAN, DHCP and Wi-Fi', d + ' — GUI: LAN, DHCP и Wi-Fi', d + ' — GUI: ‏LAN, ‏DHCP ו-Wi-Fi'), T('The Linksys web interface: every page is applied with Save Settings.', 'Веб-интерфейс Linksys: каждая страница применяется кнопкой Save Settings.', 'ממשק האינטרנט של Linksys: כל דף נשמר בכפתור Save Settings.')],
+    ap: [T(d + ' — Config → Port 1: SSID and security', d + ' — Config → Port 1: SSID и защита', d + ' — Config → Port 1: ‏SSID ואבטחה'), T('An access point is a bridge from Wi-Fi to the wired LAN: it needs only the SSID and the security settings.', 'Точка доступа — мост из Wi-Fi в проводную LAN: ей нужны только SSID и настройки защиты.', 'נקודת גישה היא גשר מה-Wi-Fi ל-LAN הקווית: היא צריכה רק SSID והגדרות אבטחה.')],
+    client: [T(d + ' — wireless card ' + w.module + ' and Wi-Fi "' + w.ssid + '"', d + ' — беспроводная карта ' + w.module + ' и Wi-Fi "' + w.ssid + '"', d + ' — כרטיס אלחוטי ' + w.module + ' ו-Wi-Fi ‏"' + w.ssid + '"'), T('The module is changed only with the power off. The client joins when the SSID, the security mode and the key match the access point.', 'Модуль меняют только при выключенном питании. Клиент подключится, когда SSID, тип защиты и ключ совпадут с точкой доступа.', 'מחליפים את המודול רק כשהחשמל כבוי. הלקוח מתחבר כשה-SSID, סוג האבטחה והמפתח תואמים לנקודת הגישה.')],
+  }[w.kind];
+  return {
+    kind: 'wifi', dev: d, title: T3[0], explain: () => T3[1],
+    lines: () => [{ via: 'gui', dev: d, lines: wifiSolutionLines(w).map((x) => ({ text: x, note: null })) }],
+    apply(topo) { wifiSolutionApply(topo, d, w); netCommit(topo); },
   };
 }
 
@@ -413,6 +486,7 @@ function taskSolutionSteps(task) {
       },
     });
   }
+  for (const [d, w] of Object.entries(s.wifi || {})) steps.push(wifiSolutionStep(d, w));
   for (const [d, v] of Object.entries(s.pc || {})) {
     steps.push({
       kind: 'pc', dev: d,

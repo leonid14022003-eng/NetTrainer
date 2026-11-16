@@ -76,7 +76,7 @@ function pcExec(topo, shell, line) {
       say('\n   IP Address......................: ' + c.ip + '\n   Subnet Mask.....................: ' + c.mask + '\n   Default Gateway.................: ' + (c.gateway || '0.0.0.0') + '\n   DNS Server......................: ' + (c.dns || '0.0.0.0'), 800);
       return out;
     }
-    const lines = ['', 'FastEthernet0 Connection:(default port)', '', '   Connection-specific DNS Suffix..: '];
+    const lines = ['', pcIfName(dev) + ' Connection:(default port)', '', '   Connection-specific DNS Suffix..: '];
     if (sw === '/all') {
       lines.push('   Physical Address................: ' + dev.ports[0].mac);
       lines.push('   DHCP Enabled....................: ' + (c.ipMode === 'dhcp' ? 'Yes' : 'No'));
@@ -115,9 +115,25 @@ function pcExec(topo, shell, line) {
       'help      Display the list of available commands',
       'hostname  Display the host name',
       'ipconfig  Display network configuration (/all /release /renew)',
+      'ssh       Secure shell to a router or switch (ssh -l username A.B.C.D)',
+      'telnet    Telnet to a router or switch (telnet A.B.C.D)',
       'ping      Send echo messages (ping [-n N] A.B.C.D)',
       'tracert   Trace route to destination',
     ].join('\n'));
+    return out;
+  }
+  // telnet A.B.C.D / ssh -l user A.B.C.D: проверки VTY, access-class, transport input — как на реальном IOS
+  if (cmd === 'telnet' || cmd === 'ssh') {
+    let user = null, target = null;
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === '-l' && args[i + 1]) { user = args[++i]; continue; }
+      target = args[i];
+    }
+    if (!target || !isIp(target) || (cmd === 'ssh' && !user)) { say(cmd === 'ssh' ? 'Usage: SSH -l username target' : 'Usage: telnet A.B.C.D'); return out; }
+    if (cmd === 'ssh') say('', 300);
+    const r = remoteLogin(topo, dev.id, target, cmd, user);
+    for (const l of r.lines) say(l, 250);
+    if (r.sess) out.push({ remote: { devId: r.devId, sess: r.sess, ip: target } });
     return out;
   }
   say('Invalid Command.');

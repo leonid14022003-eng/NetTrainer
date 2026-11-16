@@ -93,6 +93,11 @@ const Workspace = {
   renderLinks(topo) {
     const L = clear(this.layers.links), LL = clear(this.layers.lights);
     const now = Date.now();
+    // Wi-Fi: пунктир «радиоволн» между точкой доступа и подключёнными клиентами, как в Packet Tracer
+    for (const [cid, apId] of Object.entries(wifiAssoc(topo).apOf)) {
+      const A = topo.devices[apId], C = topo.devices[cid];
+      if (A && C) L.appendChild(svgEl('line', { x1: A.x, y1: A.y, x2: C.x, y2: C.y, class: 'link wifi' }));
+    }
     for (const l of Object.values(topo.links)) {
       const g = this.linkGeom(topo, l);
       const { A, B } = g;
@@ -482,13 +487,14 @@ const Workspace = {
     if (auto) {
       const A = topo.devices[st.dev];
       const serialStart = isSerialPort(st.port);
-      const prefer = serialStart ? 'Serial' : (A.type === 'router' || A.type === 'switch') && dev.type !== 'pc' ? 'Gigabit' : null;
+      const prefer = serialStart ? 'Serial' : isHomeRouter(dev) ? (A.type === 'pc' || A.type === 'switch' || isAccessPoint(A) ? 'Ethernet' : 'Internet') : (A.type === 'router' || A.type === 'switch') && dev.type !== 'pc' ? 'Gigabit' : null;
       let port = firstFreePort(dev, prefer, false);
       if (port && isSerialPort(port) !== serialStart) port = null;
       if (!port) { toast(dev.name + ': no free ports'); return; }
       // перевыбрать порт старта с учётом второго устройства
       let sport = st.port;
-      if (!serialStart && (dev.type === 'router' || dev.type === 'switch') && A.type !== 'pc') { const g = firstFreePort(A, 'Gigabit', false); if (g && !isSerialPort(g)) sport = g; }
+      if (!serialStart && (dev.type === 'router' || dev.type === 'switch') && A.type !== 'pc' && !isHomeRouter(A)) { const g = firstFreePort(A, 'Gigabit', false); if (g && !isSerialPort(g)) sport = g; }
+      if (isHomeRouter(A) && !A.ports.find((p) => p.name === sport).link) { const e2 = firstFreePort(A, dev.type === 'pc' || dev.type === 'switch' || isAccessPoint(dev) ? 'Ethernet' : 'Internet', false); if (e2) sport = e2; }
       this.makeLink(st.dev, sport, devId, port, 'auto');
     } else {
       this.portMenu(dev, e.clientX, e.clientY, (port) => this.makeLink(st.dev, st.port, devId, port, App.cableType));
@@ -499,7 +505,7 @@ const Workspace = {
     const cat = DEVICE_CATALOG[dev.model];
     const wantConsole = App.cableType === 'console';
     const wantSerial = ['serial', 'dce', 'dte'].includes(App.cableType);
-    const names = [...(cat.menu || []), ...dev.ports.filter((p) => !p.console).map((p) => p.name)];
+    const names = [...(cat.menu || []), ...dev.ports.filter((p) => !p.console && !(isWirelessClient(dev) && p.name === 'FastEthernet0')).map((p) => p.name)];
     const items = names.map((n) => {
       const p = getPort(dev, n);
       const isCon = p && p.console;
@@ -566,12 +572,12 @@ function deviceTipEl(topo, id) {
   lines.push(padR('Port', 24) + padR('Link', 6) + padR('VLAN', 6) + padR('IP Address', 20) + 'MAC Address');
   const ports = d.ports.filter((p) => !p.console);
   for (const p of ports) {
-    const up = portPhysUp(topo, d.id, p.name);
+    const up = d.type === 'pc' ? pcNicUp(topo, d) : portPhysUp(topo, d.id, p.name);
     let vlan = '--', ip = '<not set>';
     if (d.type === 'switch') vlan = String(d.cfg.interfaces[p.name].accessVlan);
     if (d.type === 'pc' && d.cfg.ip) ip = d.cfg.ip + '/' + maskToLen(d.cfg.mask);
     if (d.type === 'router') { const a = ifAddr(d, p.name); if (a) ip = intToIp(a.ip) + '/' + a.len; }
-    lines.push(padR(p.name, 24) + padR(up ? 'Up' : 'Down', 6) + padR(vlan, 6) + padR(ip, 20) + (p.mac || ''));
+    lines.push(padR(d.type === 'pc' && p.name === 'FastEthernet0' ? pcIfName(d) : p.name, 24) + padR(up ? 'Up' : 'Down', 6) + padR(vlan, 6) + padR(ip, 20) + (p.mac || ''));
   }
   if (d.type !== 'pc' && d.type !== 'hub') {
     for (const n of Object.keys(d.cfg.interfaces)) {
@@ -581,6 +587,8 @@ function deviceTipEl(topo, id) {
     }
   }
   if (d.type === 'pc') lines.push('', 'Gateway: ' + (d.cfg.gateway || '<not set>') + (d.cfg.ipMode === 'dhcp' ? '   (DHCP)' : ''));
+  if (wifiRadioPort(d)) { const w = wifiApCfg(d); lines.push('', 'SSID: ' + w.ssid + '   Security: ' + WIFI_SECURITY[w.security || 'disabled'] + '   Clients: ' + (wifiAssoc(topo).clients[d.id] || []).length); }
+  if (isWirelessClient(d)) { const ap = wifiApOf(topo, d.id); lines.push('Wireless: ' + (ap ? 'associated with ' + topo.devices[ap].name + ' (SSID ' + d.cfg.wifi.ssid + ')' : 'not associated')); }
   lines.push('', 'Physical Location: Intercity > Home City > Corporate Office > Main Wiring Closet');
   return h('pre', { class: 'mono' }, lines.join('\n'));
 }
@@ -589,6 +597,6 @@ function linkTipEl(topo, id) {
   const l = topo.links[id];
   const A = topo.devices[l.a.dev], B = topo.devices[l.b.dev];
   const lines = ['Source Device: ' + A.name, 'Source Port: ' + l.a.port, 'Dest. Device: ' + B.name, 'Dest. Port: ' + l.b.port, 'Cable Type: ' + CABLE_NAMES[l.cable]];
-  if (l.cable !== 'console' && !linkCableOk(topo, l)) lines.push('', '⚠ Wrong cable type — use ' + CABLE_NAMES[correctCable(A, B)]);
+  if (l.cable !== 'console' && !linkCableOk(topo, l)) lines.push('', '⚠ Wrong cable type — use ' + CABLE_NAMES[correctCable(A, B, l.a.port, l.b.port)]);
   return h('pre', { class: 'mono' }, lines.join('\n'));
 }

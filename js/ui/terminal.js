@@ -50,6 +50,7 @@ const Terminal = {
   notify(st) { for (const v of st.views) v.refresh(); },
 
   prompt(st) {
+    if (st.kind === 'pc' && st.remote) return iosPrompt(st.topo, st.remote.sess);
     if (st.kind === 'pc') return pcPrompt();
     return iosPrompt(st.topo, st.sess);
   },
@@ -74,7 +75,24 @@ const Terminal = {
     App.changed({ noCommit: true });
   },
 
+  // Сеанс telnet / ssh из командной строки ПК: строки уходят в IOS удалённого устройства
+  async runRemote(st, line) {
+    const r = st.remote;
+    const hidden = r.sess.pending && r.sess.pending.hidden;
+    this.append(st, this.prompt(st) + (hidden ? '' : line) + '\n');
+    if (line.trim() && !r.sess.pending) { st.hist.push(line); st.hpos = -1; }
+    const res = iosExec(st.topo, r.sess, line);
+    if (res.slow && res.out) await this.typeOut(st, res.out, 120);
+    else this.append(st, res.out || '');
+    if (!r.sess.started || !st.topo.devices[r.devId]) {
+      this.append(st, '\n[Connection to ' + r.ip + ' closed by foreign host]\n');
+      st.remote = null;
+    }
+    App.changed({ noCommit: true });
+  },
+
   async runPc(st, line) {
+    if (st.remote) return this.runRemote(st, line);
     const p = this.prompt(st);
     this.append(st, p + line + '\n');
     if (line.trim()) { st.hist.push(line); st.hpos = -1; }
@@ -83,6 +101,7 @@ const Terminal = {
     const chunks = pcExec(st.topo, st.shell, line);
     for (const c of chunks) {
       if (c.clear) { st.buf = ''; this.notify(st); continue; }
+      if (c.remote) { st.remote = c.remote; continue; }
       if (c.delay) await this.sleep(c.delay);
       this.append(st, c.text + '\n');
     }
@@ -120,7 +139,8 @@ const Terminal = {
         out.textContent = st.buf;
         const p = Terminal.prompt(st);
         promptEl.textContent = p;
-        const hidden = kind === 'ios' && st.sess.pending && st.sess.pending.hidden;
+        const rs = kind === 'ios' ? st.sess : st.remote && st.remote.sess;
+        const hidden = !!(rs && rs.pending && rs.pending.hidden);
         input.classList.toggle('secret', !!hidden);
         input.disabled = st.busy;
         inrow.style.visibility = st.busy ? 'hidden' : 'visible';

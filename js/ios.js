@@ -390,6 +390,7 @@ function iosRun(topo, sess, line, prompt) {
 function iosHandlePending(topo, sess, line) {
   const dev = topo.devices[sess.devId];
   const p = sess.pending;
+  if (p.kind === 'vty') return vtyPending(topo, sess, line);
   if (p.kind === 'login') {
     const con = dev.cfg.lines.con;
     if (line === con.password) { sess.pending = null; return { out: '' }; }
@@ -605,12 +606,14 @@ const IFM = ['if', 'subif', 'range'];
 // --- EXEC ---
 iosDef(EXEC, 'enable', (c) => {
   if (c.sess.mode === 'priv') return;
+  if (c.sess.vty && !c.cfg.enableSecret && !c.cfg.enablePassword) { c.out('% No password set'); return; }   // по VTY без enable secret в # не пустят
   if (c.cfg.enableSecret || c.cfg.enablePassword) { c.sess.pending = { kind: 'enable', tries: 0, prompt: 'Password: ', hidden: true }; return; }
   c.sess.mode = 'priv';
 }, { ro: true });
 iosDef(['priv'], 'disable', (c) => { c.sess.mode = 'user'; }, { ro: true });
 const iosLogout = (c) => {
   c.sess.started = false; c.sess.mode = 'user';
+  if (c.sess.vty) return;   // сеанс telnet / ssh: ПК сам напишет «Connection closed»
   c.out('\n\n' + c.cfg.hostname + ' con0 is now available\n\n\n\n\n\nPress RETURN to get started.\n');
 };
 iosDef(EXEC, 'exit', iosLogout, { ro: true });
@@ -702,7 +705,7 @@ function iosPing(c, ipStr, count) {
   const sim = netSimHook(c.topo, c.dev.id);
   for (let i = 0; i < count; i++) {
     const r = pingOnce(c.topo, c.dev.id, dst, { arp: true, events: i === 0 && sim ? sim.events : undefined, stepRef: sim ? sim.stepRef : undefined });
-    if (r.status === 'reply') { marks += '!'; ok++; } else if (r.status === 'unreachable') marks += 'U'; else marks += '.';
+    if (r.status === 'reply') { marks += '!'; ok++; } else if (r.status === 'unreachable') marks += marks.endsWith('U') ? '.' : 'U'; else marks += '.';   // IOS ограничивает частоту ICMP unreachable: U.U.U
   }
   if (sim) sim.done();
   lines.push(marks);
@@ -1498,7 +1501,7 @@ function iosShowIpInterface(topo, dev, n) {
   if (!hs.length) L.push('  Helper address is not set');
   else if (hs.length === 1) L.push('  Helper address is ' + hs[0]);
   else L.push('  Helper addresses are ' + hs[0], ...hs.slice(1).map((x) => '                       ' + x));
-  L.push('  Directed broadcast forwarding is disabled', '  Outgoing access list is not set', '  Inbound  access list is not set', '  Proxy ARP is enabled', '  Split horizon is enabled',
+  L.push('  Directed broadcast forwarding is disabled', '  Outgoing access list is ' + (ic.aclOut || 'not set'), '  Inbound  access list is ' + (ic.aclIn || 'not set'), '  Proxy ARP is enabled', '  Split horizon is enabled',
     '  ICMP redirects are always sent', '  ICMP unreachables are always sent', '  ICMP mask replies are never sent');
   return L.join('\n');
 }
@@ -1756,6 +1759,7 @@ function iosRunningConfig(topo, dev, cfg, isStartup) {
       if (ic.encap) L.push(' encapsulation dot1Q ' + ic.encap.vlan + (ic.encap.native ? ' native' : ''));
       L.push(ic.ip ? ' ip address ' + ic.ip + ' ' + ic.mask : ' no ip address');
       for (const h of ic.helpers || []) L.push(' ip helper-address ' + h);
+      L.push(...aclNatRunningIf(ic));
       if (ic.ospfHello) L.push(' ip ospf hello-interval ' + ic.ospfHello);
       if (ic.ospfDead) L.push(' ip ospf dead-interval ' + ic.ospfDead);
       if (ic.ospfNet) L.push(' ip ospf network ' + ic.ospfNet);
@@ -1790,12 +1794,14 @@ function iosRunningConfig(topo, dev, cfg, isStartup) {
       if (r.autoSummary === false) L.push(' no auto-summary');
       L.push('!');
     }
+    L.push(...natRunningGlobal(cfg));
     L.push('ip classless');
     for (const s of cfg.staticRoutes) {
       L.push('ip route ' + s.net + ' ' + s.mask + (s.exitIf ? ' ' + s.exitIf : '') + (s.nextHop ? ' ' + s.nextHop : '') + (s.ad ? ' ' + s.ad : ''));
     }
     L.push('!', 'ip flow-export version 9', '!');
   }
+  L.push(...aclRunningGlobal(cfg));
   if (cfg.banner) L.push('banner motd ^C' + cfg.banner + '^C', '!');
   L.push('!');
   const ln = (name, hdr) => {
@@ -1804,6 +1810,7 @@ function iosRunningConfig(topo, dev, cfg, isStartup) {
     if (l.password) L.push(' password ' + iosPw(cfg, l.password));
     if (l.loginLocal) L.push(' login local');
     else if (l.login) L.push(' login');
+    if (l.accessClass) L.push(' access-class ' + l.accessClass + ' in');
     if (l.transport) L.push(' transport input ' + l.transport);
     if (l.loggingSync) L.push(' logging synchronous');
   };
@@ -1815,6 +1822,8 @@ function iosRunningConfig(topo, dev, cfg, isStartup) {
   const vty = cfg.lines.vty || {};
   if (vty.password) L.push(' password ' + iosPw(cfg, vty.password));
   if (vty.login) L.push(vty.loginLocal ? ' login local' : ' login');
+  if (vty.accessClass) L.push(' access-class ' + vty.accessClass + ' in');
+  if (vty.transport) L.push(' transport input ' + vty.transport);
   L.push('!', '!', 'end');
   const body = L.join('\n');
   return (isStartup ? 'Using ' + body.length + ' bytes\n' : 'Building configuration...\n\nCurrent configuration : ' + body.length + ' bytes\n') + body + '\n';

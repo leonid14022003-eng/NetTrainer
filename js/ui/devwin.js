@@ -4,8 +4,8 @@
 const MODULE_LISTS = {
   isr4: ['NIM-2T', 'NIM-ES2-4', 'NIM-Cover', 'GLC-GE-100FX', 'GLC-LH-SMD', 'GLC-T', 'GLC-TE'],
   isr: ['HWIC-2T', 'HWIC-4ESW', 'HWIC-8A', 'HWIC-1GE-SFP', 'HWIC-AP-AG-B', 'HWIC-1ENET', 'GLC-LH-SMD', 'GLC-T'],
-  pc: ['PT-HOST-NM-1AM', 'PT-HOST-NM-1CE', 'PT-HOST-NM-1CFE', 'PT-HOST-NM-1CGE', 'PT-HOST-NM-1FFE', 'PT-HOST-NM-1W', 'PT-HEADPHONE', 'PT-MICROPHONE'],
-  laptop: ['PT-LAPTOP-NM-1AM', 'PT-LAPTOP-NM-1CE', 'PT-LAPTOP-NM-1CFE', 'PT-LAPTOP-NM-1CGE', 'PT-LAPTOP-NM-1W'],
+  pc: ['PT-HOST-NM-1AM', 'PT-HOST-NM-1CE', 'PT-HOST-NM-1CFE', 'PT-HOST-NM-1CGE', 'PT-HOST-NM-1FFE', 'PT-HOST-NM-1W', 'WMP300N', 'PT-HEADPHONE', 'PT-MICROPHONE'],
+  laptop: ['PT-LAPTOP-NM-1AM', 'PT-LAPTOP-NM-1CE', 'PT-LAPTOP-NM-1CFE', 'PT-LAPTOP-NM-1CGE', 'PT-LAPTOP-NM-1W', 'WPC300N'],
 };
 
 const DevWin = {
@@ -19,7 +19,9 @@ const DevWin = {
     if (!dev) return;
     if (ex) { ex.win.focus(); if (tab) ex.setTab(tab); return; }
     const isPc = dev.type === 'pc';
-    const tabs = dev.type === 'hub' ? ['Physical', 'Attributes'] : isPc ? ['Physical', 'Config', 'Desktop', 'Programming', 'Attributes'] : ['Physical', 'Config', 'CLI', 'Attributes'];
+    const tabs = isHomeRouter(dev) ? ['Physical', 'Config', 'GUI', 'Attributes'] : isAccessPoint(dev) ? ['Physical', 'Config', 'Attributes'] : dev.type === 'hub' ? ['Physical', 'Attributes']
+      : dev.model === 'Server' ? ['Physical', 'Config', 'Services', 'Desktop', 'Programming', 'Attributes'] : isPc ? ['Physical', 'Config', 'Desktop', 'Programming', 'Attributes'] : ['Physical', 'Config', 'CLI', 'Attributes'];
+    const defTab = isHomeRouter(dev) ? 'gui' : isAccessPoint(dev) ? 'config' : dev.type === 'hub' ? 'physical' : isPc ? 'desktop' : 'cli';
     const win = makeWindow({ title: dev.name, w: 700, h: 560, cls: 'devwin', onClose: () => { st.destroy(); this.wins.delete(key); } });
     const tabbar = h('div', { class: 'tabs' });
     const content = h('div', { class: 'tabcontent' });
@@ -31,6 +33,7 @@ const DevWin = {
       setTab(t) {
         t = (t || 'Physical').toLowerCase();
         if (t === 'programming') { toast('Programming is not available in NetTrainer'); return; }
+        if (!tabs.some((x) => x.toLowerCase() === t)) t = defTab;
         this.tab = t;
         $all('.tab', tabbar).forEach((b) => b.classList.toggle('on', b.dataset.tab === t));
         this.renderTab();
@@ -46,6 +49,8 @@ const DevWin = {
         else if (this.tab === 'cli') renderCliTab(this, content);
         else if (this.tab === 'desktop') renderDesktopTab(this, content);
         else if (this.tab === 'attributes') renderAttrTab(this, content);
+        else if (this.tab === 'gui') renderHomeGuiTab(this, content);
+        else if (this.tab === 'services') renderServicesTab(this, content);
       },
       refresh() {
         const d = this.dev();
@@ -61,7 +66,7 @@ const DevWin = {
     };
     for (const t of tabs) tabbar.appendChild(h('button', { class: 'tab' + (t === 'Programming' ? ' dis' : ''), dataset: { tab: t.toLowerCase() }, onclick: () => st.setTab(t) }, t));
     this.wins.set(key, { win, st, setTab: (t) => st.setTab(t) });
-    st.setTab(tab || (dev.type === 'hub' ? 'physical' : isPc ? 'desktop' : 'cli'));
+    st.setTab(tab || defTab);
   },
 
   close(topo, devId) { const w = this.wins.get(this.key(topo, devId)); if (w) w.win.close(); },
@@ -72,11 +77,33 @@ const DevWin = {
 // ---------- Physical ----------
 function renderPhysTab(st, el) {
   const d = st.dev();
-  const mods = d.type === 'router' ? (d.model.startsWith('43') ? MODULE_LISTS.isr4 : MODULE_LISTS.isr) : d.model === 'PC' ? MODULE_LISTS.pc : d.model === 'Laptop' ? MODULE_LISTS.laptop : [];
-  const desc = h('div', { class: 'pdesc' }, d.type === 'router' ? 'Module installation is not simulated in NetTrainer: the Gigabit Ethernet ports and a 2-port serial module (' + (DEVICE_CATALOG[d.model].module || 'HWIC-2T') + ') are ready to use. Use the power switch on the rear panel to turn the device off/on.'
-    : d.type === 'switch' ? 'The switch is powered on automatically once it is connected with a power cable. There is no power button.' : 'Click the power button to turn the device off or on.');
+  const wifiDev = isHomeRouter(d) || isAccessPoint(d);
+  const mods = wifiDev ? [] : d.type === 'router' ? (d.model.startsWith('43') ? MODULE_LISTS.isr4 : MODULE_LISTS.isr) : d.model === 'PC' ? MODULE_LISTS.pc : d.model === 'Laptop' ? MODULE_LISTS.laptop : [];
+  const swap = WIFI_MODULES[d.model];
+  const baseDesc = wifiDev ? 'Wireless device: configure it on the ' + (isHomeRouter(d) ? 'GUI or Config' : 'Config') + ' tab. Use the power switch on the rear panel to turn it off/on.'
+    : d.type === 'router' ? 'Module installation is not simulated in NetTrainer: the Gigabit Ethernet ports and a 2-port serial module (' + (DEVICE_CATALOG[d.model].module || 'HWIC-2T') + ') are ready to use. Use the power switch on the rear panel to turn the device off/on.'
+    : d.type === 'switch' ? 'The switch is powered on automatically once it is connected with a power cable. There is no power button.'
+    : swap ? 'Installed network module: ' + (isWirelessClient(d) ? swap.wireless + ' (Wi-Fi, port Wireless0)' : swap.wired + ' (Fast Ethernet, port FastEthernet0)') + '. To change it: power OFF → click ' + swap.wireless + ' or ' + swap.wired + ' → Install → power ON.' : 'Click the power button to turn the device off or on.';
+  const desc = h('div', { class: 'pdesc' }, baseDesc);
+  const MOD_INFO = { WMP300N: 'Linksys WMP300N: wireless-N PCI adapter (2.4 GHz, WEP / WPA / WPA2). Replaces the Fast Ethernet card; the PC gets port Wireless0.',
+    WPC300N: 'Linksys WPC300N: wireless-N notebook adapter (2.4 GHz, WEP / WPA / WPA2). Replaces the Fast Ethernet card; the laptop gets port Wireless0.',
+    'PT-HOST-NM-1CFE': 'PT-HOST-NM-1CFE: Fast Ethernet copper NIC (default). Port FastEthernet0.', 'PT-LAPTOP-NM-1CFE': 'PT-LAPTOP-NM-1CFE: Fast Ethernet copper NIC (default). Port FastEthernet0.' };
+  const pick = (m) => {
+    clear(desc);
+    desc.appendChild(document.createTextNode(MOD_INFO[m] || m + ': expansion module (decorative in NetTrainer — not simulated).'));
+    if (swap && (m === swap.wired || m === swap.wireless)) {
+      desc.appendChild(h('div', { class: 'frow' }, h('button', { class: 'btn sm primary', onclick: () => {
+        App.checkpoint();
+        const r = wifiInstallModule(st.topo, d.id, m);
+        if (r.error === 'power') { App.undoStacks[App.topoKey()].pop(); toast('Cannot add a module when the power is on. Turn the device off first (Physical → power button).', 'err'); return; }
+        if (r.error) { App.undoStacks[App.topoKey()].pop(); return; }
+        toast(r.same ? m + ' is already installed' : m + ' installed. Turn the power back on.');
+        App.changed(); st.renderTab();
+      } }, 'Install ' + m)));
+    }
+  };
   const list = h('div', { class: 'modules' }, h('div', { class: 'mhead' }, 'MODULES'),
-    mods.map((m) => h('div', { class: 'mod', onclick: () => { desc.textContent = m + ': expansion module (decorative in NetTrainer — not simulated).'; } }, m)));
+    mods.map((m) => h('div', { class: 'mod' + (swap && m === (isWirelessClient(d) ? swap.wireless : swap.wired) ? ' on' : ''), onclick: () => pick(m) }, m)));
   let zoom = st.physZoom || 1.6;
   const pimg = h('div', { class: 'pimg' });
   const draw = () => {
@@ -87,7 +114,7 @@ function renderPhysTab(st, el) {
     pimg.appendChild(h('div', { class: 'plabel2' }, 'Front'));
     pimg.appendChild(s1);
     $all('.pjack', s1).forEach((j) => { j.addEventListener('mouseenter', (e) => showTip(j.dataset.port, e.clientX, e.clientY)); j.addEventListener('mouseleave', hideTip); });
-    if (d.type === 'router' || d.type === 'switch' || d.type === 'pc') {
+    if (d.type === 'router' || d.type === 'switch' || d.type === 'pc' || isAccessPoint(d)) {
       const r = rearPanel(d, Math.min(zoom, 1.6));
       const s2 = svgEl('svg', { width: r.w + 4, height: r.h + 4, class: 'panel' });
       s2.innerHTML = '<g transform="translate(2 2)">' + r.svg + '</g>';
@@ -101,7 +128,7 @@ function renderPhysTab(st, el) {
     h('button', { class: 'btn sm', onclick: () => { zoom = Math.min(3, zoom * 1.25); st.physZoom = zoom; draw(); } }, 'Zoom In'),
     h('button', { class: 'btn sm', onclick: () => { zoom = 1.6; st.physZoom = zoom; draw(); } }, 'Original Size'),
     h('button', { class: 'btn sm', onclick: () => { zoom = Math.max(0.8, zoom / 1.25); st.physZoom = zoom; draw(); } }, 'Zoom Out'),
-    (d.type === 'router' || d.type === 'pc') ? h('button', { class: 'btn sm', onclick: () => { d.off = !d.off; App.changed(); draw(); } }, d.off ? 'Power ON' : 'Power OFF') : null);
+    (d.type === 'router' || d.type === 'pc' || isAccessPoint(d)) ? h('button', { class: 'btn sm', onclick: () => { d.off = !d.off; App.changed(); draw(); } }, d.off ? 'Power ON' : 'Power OFF') : null);
   draw();
   el.appendChild(h('div', { class: 'phystab' }, list, h('div', { class: 'pview' }, h('div', { class: 'pheader' }, 'Physical Device View'), zbar, pimg, desc)));
 }
@@ -142,17 +169,18 @@ function renderConfigTab(st, el) {
   const pane = h('div', { class: 'cpane' });
   const items = [];
   items.push(['hdr', 'GLOBAL'], ['settings', 'Settings']);
-  if (d.type === 'router') items.push(['hdr', 'ROUTING'], ['static', 'Static'], ['rip', 'RIP']);
+  const wifiDev = isHomeRouter(d) || isAccessPoint(d);
+  if (d.type === 'router' && !wifiDev) items.push(['hdr', 'ROUTING'], ['static', 'Static'], ['rip', 'RIP']);
   if (d.type === 'switch') items.push(['hdr', 'SWITCHING'], ['vlandb', 'VLAN Database']);
   items.push(['hdr', 'INTERFACE']);
-  const ifs = d.type === 'pc' ? ['FastEthernet0'] : d.ports.filter((p) => !p.console).map((p) => p.name).concat(d.type === 'switch' ? Object.keys(d.cfg.interfaces).filter((n) => n.startsWith('Vlan')) : []);
+  const ifs = isHomeRouter(d) ? ['Internet', 'LAN', 'Wireless'] : isAccessPoint(d) ? ['Port 0', 'Port 1'] : d.type === 'pc' ? [pcIfName(d)] : d.ports.filter((p) => !p.console).map((p) => p.name).concat(d.type === 'switch' ? Object.keys(d.cfg.interfaces).filter((n) => n.startsWith('Vlan')) : []);
   for (const n of ifs) items.push(['if:' + n, n]);
   for (const [k, label] of items) {
     if (k === 'hdr') { nav.appendChild(h('div', { class: 'chdr' }, label)); continue; }
     nav.appendChild(h('div', { class: 'citem' + (st.cfgPane === k ? ' on' : ''), onclick: () => { st.cfgPane = k; st.renderTab(); } }, label));
   }
   const body = h('div', { class: 'ccol' }, pane);
-  if (d.type !== 'pc') {
+  if (d.type !== 'pc' && !wifiDev) {
     const log = h('pre', { class: 'eqlog' }, st.eqLog.join('\n'));
     body.appendChild(h('div', { class: 'eqbox' }, h('div', { class: 'eqhdr' }, 'Equivalent IOS Commands'), log));
     setTimeout(() => { log.scrollTop = log.scrollHeight; }, 0);
@@ -163,9 +191,11 @@ function renderConfigTab(st, el) {
 
 function configPaneValid(d, k) {
   if (k === 'settings') return true;
+  if (isHomeRouter(d)) return ['if:Internet', 'if:LAN', 'if:Wireless'].includes(k);
+  if (isAccessPoint(d)) return k === 'if:Port 0' || k === 'if:Port 1';
   if (k === 'static' || k === 'rip') return d.type === 'router';
   if (k === 'vlandb') return d.type === 'switch';
-  if (k.startsWith('if:')) return d.type === 'pc' ? k === 'if:FastEthernet0' : !!d.cfg.interfaces[k.slice(3)];
+  if (k.startsWith('if:')) return d.type === 'pc' ? k === 'if:' + pcIfName(d) : !!d.cfg.interfaces[k.slice(3)];
   return false;
 }
 
@@ -185,6 +215,7 @@ function renderConfigPane(st, pane) {
       pane.appendChild(field('DNS Server', c.dns, (v) => { c.dns = v || null; App.changed(); }, { validate: isIp, disabled: c.ipMode === 'dhcp' }));
       return;
     }
+    if (isHomeRouter(d) || isAccessPoint(d)) return;
     pane.appendChild(field('Hostname', d.cfg.hostname, (v) => guiIos(st, ['hostname ' + v])));
     pane.appendChild(h('div', { class: 'sub' }, 'NVRAM'));
     pane.appendChild(h('div', { class: 'frow' }, h('label', null, ''),
@@ -243,7 +274,8 @@ function renderConfigPane(st, pane) {
   if (k.startsWith('if:')) {
     const n = k.slice(3);
     pane.appendChild(title(n));
-    if (d.type === 'pc') { renderPcIfPane(st, pane); return; }
+    if (d.type === 'pc') { if (isWirelessClient(d)) renderPcWirelessIf(st, pane); else renderPcIfPane(st, pane); return; }
+    if (isHomeRouter(d) || isAccessPoint(d)) { renderWifiIfPane(st, pane, n); return; }
     const ic = d.cfg.interfaces[n];
     const port = getPort(d, n);
     pane.appendChild(h('div', { class: 'frow' }, h('label', null, 'Port Status'), h('label', null, h('input', { type: 'checkbox', checked: !ic.shutdown, onchange: (e) => guiIos(st, ['interface ' + n, e.target.checked ? 'no shutdown' : 'shutdown']) }), ' On')));
@@ -356,7 +388,7 @@ function renderCliTab(st, el) {
 // Иконки рабочего стола как в Packet Tracer (картинки d-* в icons.js); na — приложение не моделируется
 const DESKTOP_APPS = [
   ['ipconfig', 'IP Configuration', 'd-ip'], ['dialup', 'Dial-up', 'd-dialup', true], ['terminal', 'Terminal', 'd-terminal'], ['cmd', 'Command Prompt', 'd-cmd'],
-  ['web', 'Web Browser', 'd-web', true], ['wireless', 'PC Wireless', 'd-wireless', true], ['vpn', 'VPN', 'd-vpn', true], ['traffic', 'Traffic Generator', 'd-traffic', true],
+  ['web', 'Web Browser', 'd-web'], ['wireless', 'PC Wireless', 'd-wireless'], ['vpn', 'VPN', 'd-vpn', true], ['traffic', 'Traffic Generator', 'd-traffic', true],
   ['mib', 'MIB Browser', 'd-mib', true], ['ipcomm', 'IP Communicator', 'd-ipcomm', true], ['email', 'E Mail', 'd-email', true], ['pppoe', 'PPPoE Dialer', 'd-pppoe', true],
   ['text', 'Text Editor', 'd-text', true], ['firewall', 'Firewall', 'd-firewall', true], ['ipv6fw', 'IPv6 Firewall', 'd-ipv6fw', true], ['netflow', 'Netflow Collector', 'd-netflow', true],
 ];
@@ -379,11 +411,13 @@ function renderDesktopApp(st, el) {
   const body = h('div', { class: 'appbody' });
   el.appendChild(h('div', { class: 'appwin' }, h('div', { class: 'appbar' }, h('span', null, name), h('button', { class: 'wclose', onclick: () => { st.app = null; st.renderTab(); } }, 'X')), body));
   if (st.app === 'ipconfig') {
-    body.appendChild(h('div', { class: 'frow' }, h('label', null, 'Interface'), h('select', { class: 'inp' }, h('option', null, 'FastEthernet0'))));
+    body.appendChild(h('div', { class: 'frow' }, h('label', null, 'Interface'), h('select', { class: 'inp' }, h('option', null, pcIfName(d)))));
     body.appendChild(h('div', { class: 'sub' }, 'IP Configuration'));
     ipConfigForm(st, body, true);
     return;
   }
+  if (st.app === 'wireless') { renderPcWirelessApp(st, body); return; }
+  if (st.app === 'web') { renderWebBrowserApp(st, body); return; }
   if (st.app === 'cmd') {
     body.classList.add('termhost');
     st.views.push(Terminal.mount(body, st.topo, d.id, 'pc'));

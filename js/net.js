@@ -15,6 +15,7 @@ function netRt(topo) {
 
 // ---------- Интерфейсы ----------
 function ifKind(name) {
+  if (name === 'LAN') return 'bvi';   // LAN беспроводного роутера (WRT300N): Ethernet 1–4 + Wi-Fi одним мостом
   if (name.startsWith('Vlan')) return 'svi';
   if (name.startsWith('Loopback')) return 'loop';
   if (name.startsWith('Port-channel')) return 'po';
@@ -42,6 +43,7 @@ function ifMac(dev, name) {
   const k = ifKind(name);
   if (k === 'svi' || k === 'loop') return dev.ports[0].mac.slice(0, 10) + 'A0' + (name.length % 10) + '1';
   if (k === 'po') { const m = ecMembers(dev, poGroup(name))[0]; return m ? getPort(dev, m).mac : dev.ports[0].mac; }
+  if (k === 'bvi') return (getPort(dev, 'Ethernet 1') || dev.ports[0]).mac;
   const p = getPort(dev, parentPort(name));
   return p ? p.mac || null : '0000.0000.0000';   // у serial (HDLC) MAC-адреса нет
 }
@@ -109,12 +111,13 @@ function ifStatus(topo, dev, name) {
   if (dev.type === 'pc' || dev.type === 'hub') {
     if (dev.off) return { status: 'down', protocol: 'down' };
     if (dev.cfg.portOn === false) return { status: 'administratively down', protocol: 'down' };
-    const up = portPhysUp(topo, dev.id, name);
+    const up = dev.type === 'pc' ? pcNicUp(topo, dev) : portPhysUp(topo, dev.id, name);
     return { status: up ? 'up' : 'down', protocol: up ? 'up' : 'down' };
   }
   const ic = dev.cfg.interfaces[name];
   if (!ic) return { status: 'deleted', protocol: 'down' };
   const k = ifKind(name);
+  if (k === 'bvi') return dev.off ? { status: 'down', protocol: 'down' } : { status: 'up', protocol: 'up' };
   if (ic.shutdown) return { status: 'administratively down', protocol: 'down' };
   if (ic.errdis) return { status: 'down', protocol: 'down', errdis: ic.errdis };
   if (k === 'po') { const up = ecPoUp(topo, dev, name); return { status: up ? 'up' : 'down', protocol: up ? 'up' : 'down' }; }
@@ -189,6 +192,7 @@ function l2Origin(dev, ifName) {
     return { port: parentPort(ifName), tag: ic.encap.native ? null : ic.encap.vlan };
   }
   if (k === 'svi') return { svi: Number(ifName.slice(4)) };
+  if (k === 'bvi') return { bridge: true };
   return null;
 }
 
@@ -220,36 +224,46 @@ function l2Reach(topo, devId, ifName) {
       queue.push({ dev: sw.id, port: p.name, tag, path });
     }
   };
+  // Мост беспроводного роутера: Ethernet 1–4 и радио — один сегмент (как встроенный коммутатор)
+  const emitFromBridge = (R, ingressPort, path) => {
+    for (const p of homeLanPorts(R)) if (p !== ingressPort) queue.push({ dev: R.id, port: p, tag: null, path });
+    queue.push({ dev: R.id, port: 'Wireless', tag: null, path });
+  };
   if (origin.svi !== undefined) emitFromSwitch(dev, origin.svi, null, []);
+  else if (origin.bridge) emitFromBridge(dev, null, []);
   else queue.push({ dev: devId, port: origin.port, tag: origin.tag, path: [] });
-  while (queue.length) {
-    const it = queue.shift();
-    if (!portPhysUp(topo, it.dev, it.port)) continue;
-    const peer = linkPeer(topo, it.dev, it.port);
+  const arrive = (it, peer) => {
     const key = peer.dev + '|' + peer.port + '|' + it.tag;
-    if (visited.has(key)) continue;
+    if (visited.has(key)) return;
     visited.add(key);
     const D = topo.devices[peer.dev];
     const hop = { link: peer.link.id, from: it.dev, to: peer.dev, fromPort: it.port, toPort: peer.port, tag: it.tag };
     if (D.type === 'switch') {
       const lp = swLogicalPort(sws, D, peer.port);
-      if (!lp) continue; // порт пучка приостановлен
+      if (!lp) return; // порт пучка приостановлен
       const v = swIngressVlan(topo, D, peer.port, it.tag);
-      if (v === null) continue;
-      if (stpBlocks(sws, D, lp, v)) continue; // порт не в FWD (BLK, LIS, LRN) кадры не передаёт
-      if (swInStorm(sws, D, v)) continue;
-      if (!psecAllows(topo, D, peer.port, srcMac)) continue; // Port Security: чужой MAC при заполненном лимите
+      if (v === null) return;
+      if (stpBlocks(sws, D, lp, v)) return; // порт не в FWD (BLK, LIS, LRN) кадры не передаёт
+      if (swInStorm(sws, D, v)) return;
+      if (!psecAllows(topo, D, peer.port, srcMac)) return; // Port Security: чужой MAC при заполненном лимите
       hop.vlan = v;
       const path = it.path.concat([hop]);
       const svi = 'Vlan' + v;
       if (D.cfg.interfaces[svi] && ifAddr(D, svi) && ifUp(topo, D, svi)) results.push({ dev: D.id, ifName: svi, path });
       emitFromSwitch(D, v, peer.port, path);
     } else if (D.type === 'hub') {
+      if (it.tag !== null && wifiRadioPort(D)) return; // точка доступа пропускает только кадры без тега
       const path = it.path.concat([hop]);
       for (const p of D.ports) {
         if (p.name === peer.port || p.console || !portPhysUp(topo, D.id, p.name)) continue;
         queue.push({ dev: D.id, port: p.name, tag: it.tag, path });
       }
+      if (wifiRadioPort(D)) queue.push({ dev: D.id, port: wifiRadioPort(D), tag: null, path }); // точка доступа: кадр уходит и в эфир
+    } else if (D.type === 'router' && isHomeRouter(D) && peer.port !== 'Internet') {
+      if (it.tag !== null) return;
+      const path = it.path.concat([hop]);
+      if (ifUp(topo, D, 'LAN') && ifAddr(D, 'LAN')) results.push({ dev: D.id, ifName: 'LAN', path });
+      emitFromBridge(D, peer.port, path);
     } else if (D.type === 'router') {
       const path = it.path.concat([hop]);
       const ifn = routerIfForFrame(D, peer.port, it.tag);
@@ -257,6 +271,10 @@ function l2Reach(topo, devId, ifName) {
     } else if (it.tag === null) {
       results.push({ dev: D.id, ifName: peer.port, path: it.path.concat([hop]) });
     }
+  };
+  while (queue.length) {
+    const it = queue.shift();
+    for (const peer of l2Next(topo, it.dev, it.port)) arrive(it, peer);
   }
   return results.filter((r) => !(r.dev === devId && r.ifName === ifName));
 }
@@ -270,6 +288,11 @@ function arpResolve(topo, devId, ifName, targetIp, proxy) {
     const D = topo.devices[r.dev];
     const a = ifAddr(D, r.ifName);
     if (a && a.ip === targetIp) return { ...r, mac: ifMac(D, r.ifName), reach };
+  }
+  // NAT: роутер отвечает на ARP за адреса inside global (статика, пул) на своём outside-интерфейсе
+  for (const r of reach) {
+    const D = topo.devices[r.dev];
+    if (D.type === 'router' && natArpAlias(D, r.ifName, targetIp)) return { ...r, mac: ifMac(D, r.ifName), reach };
   }
   if (proxy) {
     for (const r of reach) {
@@ -748,26 +771,41 @@ function egressFor(topo, dev, dst) {
 function initialTtl(dev) { return dev.type === 'pc' ? 128 : 255; }
 
 // ---------- Доставка пакета ----------
-// opts: { arp: true|false (учитывать ARP-кэш), events: [], stepRef: {v}, proto, info }
+// opts: { arp: true|false (учитывать ARP-кэш), events: [], stepRef: {v}, proto, info, pkt, probe, natScratch }
+// pkt — заголовки пакета: {proto: 'icmp'|'tcp'|'udp', src, sport, dport, id, icmp, est}. На роутерах пакет проходит
+// входной ACL → NAT outside→inside → маршрутизация → NAT inside→outside → выходной ACL (порядок как в IOS).
+// probe — проверка задания: счётчики ACL и таблица NAT не меняются (трансляции живут в opts.natScratch).
 function deliver(topo, srcDevId, dstIp, ttl, opts = {}) {
   const rt = netRt(topo);
+  const pkt = Object.assign({ proto: 'icmp', icmp: 'echo' }, opts.pkt || {});
+  pkt.dst = dstIp;
+  if (pkt.src === undefined || pkt.src === null) pkt.src = sourceIpFor(topo, topo.devices[srcDevId], dstIp);
   let cur = srcDevId, inIf = null, ttlNow = ttl, first = true, hops = 0;
   const routersPassed = [];
-  const fail = (code, at, from) => ({ ok: false, fail: { code, at, from }, ttl: ttlNow, routers: routersPassed });
+  const fail = (code, at, from) => ({ ok: false, fail: { code, at, from }, ttl: ttlNow, routers: routersPassed, pkt });
   for (;;) {
     const D = topo.devices[cur];
-    if (ownsIpUp(topo, D, dstIp)) return { ok: true, dev: cur, ifName: ownsIpUp(topo, D, dstIp), ttl: ttlNow, routers: routersPassed };
     let fromIp = null;
-    if (!first) {
-      if (D.type !== 'router') return fail('drop', cur);
+    if (!first && D.type === 'router') {
       const a = ifAddr(D, inIf);
       fromIp = a ? a.ip : null;
+      if (!aclPass(topo, D, inIf, 'in', pkt, opts)) return fail('acl', cur, fromIp);   // входной ACL проверяет и пакеты к самому роутеру
+      natInbound(topo, D, inIf, pkt, opts);
+    }
+    const own = ownsIpUp(topo, D, pkt.dst);
+    if (own) return { ok: true, dev: cur, ifName: own, ttl: ttlNow, routers: routersPassed, pkt };
+    if (!first) {
+      if (D.type !== 'router') return fail('drop', cur);
       ttlNow -= 1;
       if (ttlNow <= 0) return fail('ttl', cur, fromIp);
       routersPassed.push(cur);
     }
-    const eg = egressFor(topo, D, dstIp);
+    const eg = egressFor(topo, D, pkt.dst);
     if (!eg) return fail(D.type === 'router' ? 'unreachable' : 'nogw', cur, first ? null : fromIp);
+    if (!first && D.type === 'router') {   // пакеты, созданные самим роутером, не транслируются и выходным ACL не проверяются
+      if (natOutbound(topo, D, inIf, eg.exitIf, pkt, opts) === false) return fail('nat', cur, fromIp);
+      if (!aclPass(topo, D, eg.exitIf, 'out', pkt, opts)) return fail('acl', cur, fromIp);
+    }
     if (first) psecObserve(topo, cur, eg.exitIf);   // отправитель «вставил кадр в порт»: порт учит MAC или ловит нарушение
     const r = arpResolve(topo, cur, eg.exitIf, eg.nextHop, eg.proxy);
     if (opts.events && !(r && r.p2p)) recordArp(topo, opts, cur, eg, r);
@@ -789,7 +827,7 @@ function deliver(topo, srcDevId, dstIp, ttl, opts = {}) {
     }
     learnMacs(topo, r.path, ifMac(D, eg.exitIf));
     if (lost) return fail('arp-pending', cur);
-    if (opts.events) recordPath(opts, r.path, opts.proto || 'ICMP', { ...(opts.info || {}), ttl: ttlNow });
+    if (opts.events) recordPath(opts, r.path, opts.proto || 'ICMP', { ...(opts.info || {}), ttl: ttlNow, src: intToIp(pkt.src), dst: intToIp(pkt.dst) });
     cur = r.dev; inIf = r.ifName; first = false;
     if (++hops > 64) return fail('loop', cur);
   }
@@ -851,6 +889,19 @@ function sourceIpFor(topo, dev, dst) {
   return a ? a.ip : null;
 }
 
+// Номер ICMP echo (identifier) — по нему PAT различает пинги, как в show ip nat translations (icmp …:1, :2 …)
+function nextIcmpId(topo, devId) {
+  const rt = netRt(topo);
+  const m = (rt.icmpId = rt.icmpId || {});
+  m[devId] = (m[devId] || 0) + 1;
+  return m[devId];
+}
+
+// Ответ об ошибке (ICMP unreachable / time exceeded) от роутера at назад к источнику пакета
+function icmpErrorBack(topo, at, fromIp, origPkt, opts) {
+  return deliver(topo, at, origPkt.src, 255, { arp: opts.arp, probe: opts.probe, natScratch: opts.natScratch, pkt: { proto: 'icmp', icmp: 'error', src: fromIp } });
+}
+
 // Один ICMP echo: {status: 'reply'|'timeout'|'unreachable'|'ttl'|'noip', from, ttl}
 function pingOnce(topo, srcDevId, dstIp, opts = {}) {
   const src = topo.devices[srcDevId];
@@ -860,26 +911,31 @@ function pingOnce(topo, srcDevId, dstIp, opts = {}) {
     if (src.type === 'router') return { status: 'timeout', noRoute: true };
     return { status: 'timeout' };
   }
+  const id = opts.probe ? 1 : nextIcmpId(topo, srcDevId);
   const info = { type: 'Echo Request', src: intToIp(srcIp || dstIp), dst: intToIp(dstIp) };
-  const req = deliver(topo, srcDevId, dstIp, initialTtl(src), { ...opts, proto: 'ICMP', info });
+  const req = deliver(topo, srcDevId, dstIp, initialTtl(src), { ...opts, proto: 'ICMP', info, pkt: { proto: 'icmp', icmp: 'echo', src: srcIp, id } });
   if (!req.ok) {
     if (opts.events) markFail(opts, req.fail.at, req.fail.code);
-    if (req.fail.code === 'unreachable' && req.fail.from !== null && req.fail.from !== undefined) {
-      const back = deliver(topo, req.fail.at, srcIp, 255, { arp: opts.arp });
-      if (back.ok) return { status: 'unreachable', from: intToIp(req.fail.from) };
+    const f = req.fail;
+    if ((f.code === 'unreachable' || f.code === 'acl') && f.from !== null && f.from !== undefined) {
+      const back = icmpErrorBack(topo, f.at, f.from, req.pkt, opts);
+      if (back.ok && back.dev === srcDevId) return { status: 'unreachable', from: intToIp(f.from), acl: f.code === 'acl', at: f.at };
     }
-    if (req.fail.code === 'ttl' && req.fail.from !== null) {
-      const back = deliver(topo, req.fail.at, srcIp, 255, { arp: opts.arp });
-      if (back.ok) return { status: 'ttl', from: intToIp(req.fail.from), at: req.fail.at };
+    if (f.code === 'ttl' && f.from !== null) {
+      const back = icmpErrorBack(topo, f.at, f.from, req.pkt, opts);
+      if (back.ok && back.dev === srcDevId) return { status: 'ttl', from: intToIp(f.from), at: f.at };
     }
-    return { status: 'timeout', reason: req.fail };
+    return { status: 'timeout', reason: f };
   }
   const dstDev = topo.devices[req.dev];
-  const info2 = { type: 'Echo Reply', src: intToIp(dstIp), dst: intToIp(srcIp) };
-  const rep = deliver(topo, req.dev, srcIp, initialTtl(dstDev), { ...opts, proto: 'ICMP', info: info2 });
-  if (!rep.ok) {
-    if (opts.events) markFail(opts, rep.fail.at, rep.fail.code);
-    return { status: 'timeout', reason: rep.fail, replyLeg: true };
+  const info2 = { type: 'Echo Reply', src: intToIp(req.pkt.dst), dst: intToIp(req.pkt.src) };
+  const rep = deliver(topo, req.dev, req.pkt.src, initialTtl(dstDev), { ...opts, proto: 'ICMP', info: info2, pkt: { proto: 'icmp', icmp: 'echo-reply', src: req.pkt.dst, id: req.pkt.id } });
+  if (!rep.ok || rep.dev !== srcDevId) {
+    if (opts.events && !rep.ok) markFail(opts, rep.fail.at, rep.fail.code);
+    if (!rep.ok && rep.fail.code === 'acl') {   // ответ остановил ACL: роутер шлёт отправителю ответа unreachable — запрос всё равно без ответа
+      return { status: 'timeout', reason: rep.fail, replyLeg: true };
+    }
+    return { status: 'timeout', reason: rep.ok ? { code: 'nat', at: rep.dev } : rep.fail, replyLeg: true };
   }
   return { status: 'reply', from: intToIp(dstIp), ttl: rep.ttl, hops: req.routers.length };
 }
@@ -889,11 +945,25 @@ function markFail(opts, at, code) {
   opts.stepRef.v++;
 }
 
-// Проверка достижимости без учёта ARP-потерь (для проверки заданий)
+// Проверка достижимости без учёта ARP-потерь (для проверки заданий): ни счётчики ACL, ни таблица NAT не меняются
 function canReach(topo, srcDevId, dstIp) {
   const ip = typeof dstIp === 'number' ? dstIp : ipToInt(dstIp);
   if (ip === null) return { status: 'timeout' };
-  return pingOnce(topo, srcDevId, ip, { arp: false });
+  return pingOnce(topo, srcDevId, ip, { arp: false, probe: true, natScratch: {} });
+}
+
+// TCP/UDP-«сессия» к сервису (веб-браузер, telnet, ssh): запрос туда, ответ обратно с флагом ACK.
+// {ok, dev (получатель), reason: {code, at}} — для ACL с established и для NAT.
+function flowOnce(topo, srcDevId, dstIp, proto, dport, opts = {}) {
+  const src = topo.devices[srcDevId];
+  const srcIp = sourceIpFor(topo, src, dstIp);
+  if (srcIp === null) return { ok: false, reason: { code: src.type === 'pc' ? 'nogw' : 'unreachable', at: srcDevId } };
+  const sport = 1024 + (nextIcmpId(topo, srcDevId) % 60000);
+  const req = deliver(topo, srcDevId, dstIp, initialTtl(src), { ...opts, proto: proto.toUpperCase(), pkt: { proto, src: srcIp, sport, dport } });
+  if (!req.ok) return { ok: false, reason: req.fail, leg: 'request' };
+  const rep = deliver(topo, req.dev, req.pkt.src, initialTtl(topo.devices[req.dev]), { ...opts, proto: proto.toUpperCase(), pkt: { proto, src: req.pkt.dst, sport: req.pkt.dport, dport: req.pkt.sport, est: true } });
+  if (!rep.ok || rep.dev !== srcDevId) return { ok: false, reason: rep.ok ? { code: 'nat', at: rep.dev } : rep.fail, leg: 'reply', dev: req.dev };
+  return { ok: true, dev: req.dev, srcSeen: req.pkt.src };
 }
 
 // Traceroute: [{hop, ip|null}], done
@@ -901,21 +971,23 @@ function traceroute(topo, srcDevId, dstIp, maxHops = 30) {
   const src = topo.devices[srcDevId];
   const srcIp = sourceIpFor(topo, src, dstIp);
   const hops = [];
+  const o = { arp: false };
   for (let ttl = 1; ttl <= maxHops; ttl++) {
     if (srcIp === null) { hops.push({ hop: ttl, ip: null }); break; }
-    const res = deliver(topo, srcDevId, dstIp, ttl, { arp: false });
+    const res = deliver(topo, srcDevId, dstIp, ttl, { arp: false, pkt: { proto: 'icmp', icmp: 'echo', src: srcIp, id: nextIcmpId(topo, srcDevId) } });
     if (res.ok) {
-      const back = deliver(topo, res.dev, srcIp, initialTtl(topo.devices[res.dev]), { arp: false });
-      hops.push({ hop: ttl, ip: back.ok ? intToIp(dstIp) : null, final: back.ok });
-      if (back.ok) return { hops, done: true };
+      const back = deliver(topo, res.dev, res.pkt.src, initialTtl(topo.devices[res.dev]), { arp: false, pkt: { proto: 'icmp', icmp: 'echo-reply', src: res.pkt.dst, id: res.pkt.id } });
+      const okBack = back.ok && back.dev === srcDevId;
+      hops.push({ hop: ttl, ip: okBack ? intToIp(dstIp) : null, final: okBack });
+      if (okBack) return { hops, done: true };
       continue;
     }
     if (res.fail.code === 'ttl' && res.fail.from !== null && res.fail.from !== undefined) {
-      const back = deliver(topo, res.fail.at, srcIp, 255, { arp: false });
-      hops.push({ hop: ttl, ip: back.ok ? intToIp(res.fail.from) : null });
+      const back = icmpErrorBack(topo, res.fail.at, res.fail.from, res.pkt, o);
+      hops.push({ hop: ttl, ip: back.ok && back.dev === srcDevId ? intToIp(res.fail.from) : null });
       continue;
     }
-    if (res.fail.code === 'unreachable' && res.fail.from !== null && res.fail.from !== undefined) {
+    if ((res.fail.code === 'unreachable' || res.fail.code === 'acl') && res.fail.from !== null && res.fail.from !== undefined) {
       hops.push({ hop: ttl, ip: intToIp(res.fail.from), unreachable: true });
       return { hops, done: false, unreachable: true };
     }
@@ -938,7 +1010,7 @@ function staticIpsInUse(topo) {
   const used = new Set();
   for (const d of Object.values(topo.devices)) {
     if (d.type === 'pc' && d.cfg.ipMode === 'dhcp') continue;
-    for (const i of l3Ifaces(d)) used.add(i.ip);
+    for (const i of l3Ifaces(d)) if (!(d.type !== 'pc' && d.cfg.interfaces[i.name] && d.cfg.interfaces[i.name].dhcp)) used.add(i.ip);
   }
   return used;
 }
@@ -985,11 +1057,15 @@ function dhcpStat(topo, router, key) {
 function dhcpRequest(topo, pcId, opts = {}) {
   const pc = topo.devices[pcId];
   if (!pc || pc.type !== 'pc') return { ok: false };
-  const mac = pc.ports[0].mac;
-  if (!portPhysUp(topo, pcId, 'FastEthernet0')) return { ok: false, reason: 'link' };
-  psecObserve(topo, pcId, 'FastEthernet0');
+  if (!pcNicUp(topo, pc)) return { ok: false, reason: 'link' };
+  return dhcpObtain(topo, pcId, 'FastEthernet0', pc.ports[0].mac, opts);
+}
+
+// DHCP-клиент на интерфейсе (ПК или порт Internet беспроводного роутера): DISCOVER broadcast → OFFER/ACK
+function dhcpObtain(topo, devId, ifName, mac, opts = {}) {
+  psecObserve(topo, devId, ifName);
   // широковещательный DISCOVER
-  const reach = l2Reach(topo, pcId, 'FastEthernet0');
+  const reach = l2Reach(topo, devId, ifName);
   if (opts.events) {
     const base = nextStep(opts);
     let maxLen = 0;
@@ -1018,11 +1094,11 @@ function dhcpRequest(topo, pcId, opts = {}) {
       for (const h of (ic.helpers || [])) {
         const hip = ipToInt(h);
         if (hip === null) continue;
-        const res = deliver(topo, R.id, hip, 255, { arp: false });
+        const res = deliver(topo, R.id, hip, 255, { arp: false, probe: true, natScratch: {}, pkt: { proto: 'udp', sport: 67, dport: 67 } });
         if (!res.ok) continue;
         const S = topo.devices[res.dev];
         if (S.type !== 'router') continue;
-        const back = deliver(topo, S.id, a.ip, 255, { arp: false });
+        const back = deliver(topo, S.id, a.ip, 255, { arp: false, probe: true, natScratch: {}, pkt: { proto: 'udp', sport: 67, dport: 67 } });
         if (!back.ok) continue;
         if (S !== R && Object.keys(S.cfg.dhcpPools).length) dhcpStat(topo, S, 'discover');
         poolRef = dhcpPoolFor(S, a.ip);
@@ -1100,12 +1176,13 @@ function netCommit(topo) {
   const rt = netRt(topo);
   swGuards(topo); // BPDU Guard и EtherChannel guard выключают порты до DHCP и сообщений о линках
   psecCommit(topo);
-  // ПК в режиме DHCP без адреса пытаются получить его снова
+  // ПК в режиме DHCP без адреса пытаются получить его снова; беспроводной роутер — адрес порта Internet у провайдера
   for (const d of Object.values(topo.devices)) {
     if (d.type === 'pc' && d.cfg.ipMode === 'dhcp' && !hasValidLease(d) && d.cfg.dhcpStatus !== 'released') {
       const res = dhcpRequest(topo, d.id);
       if (res.ok) { Object.assign(d.cfg, { ip: res.ip, mask: res.mask, gateway: res.gateway, dns: res.dns, dhcpStatus: 'ok' }); touch(topo); }
     }
+    if (d.type === 'router' && isHomeRouter(d)) homeWanDhcp(topo, d);
   }
   const now = snapshotStates(topo);
   if (rt.lastStates) {

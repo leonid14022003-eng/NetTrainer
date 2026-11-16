@@ -1,7 +1,7 @@
 'use strict';
 // Офлайн-режим приложения NetTrainer. VERSION подставляет build.py (хэш файлов сайта):
 // любое изменение сайта = новая версия, и приложение покажет плашку «Обновить».
-const VERSION = '3ca6a707dd8c';
+const VERSION = '1e6eb08800f8';
 const CACHE = 'nettrainer-' + VERSION;
 const FILES = ['./', 'index.html', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png', 'icons/apple-touch-icon.png'];
 

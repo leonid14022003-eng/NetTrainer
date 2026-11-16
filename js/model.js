@@ -144,7 +144,9 @@ function addDevice(topo, model, x, y, opts = {}) {
   const ports = catPorts(cat).map((p) => ({ name: p, mac: isSerialPort(p) ? null : makeMac(_macRng), link: null }));
   if (cat.console) ports.push({ name: cat.console, mac: null, link: null, console: true });
   let cfg;
-  if (cat.type === 'router') cfg = defaultRouterCfg(catPorts(cat));
+  if (cat.home) cfg = defaultHomeCfg(cat.ports);
+  else if (cat.ap) cfg = defaultApCfg();
+  else if (cat.type === 'router') cfg = defaultRouterCfg(catPorts(cat));
   else if (cat.type === 'switch') cfg = defaultSwitchCfg(cat.ports);
   else if (cat.type === 'hub') cfg = {};
   else cfg = defaultPcCfg();
@@ -166,10 +168,17 @@ function removeDevice(topo, devId) {
 function catPorts(cat) { return cat.ports.concat(cat.serial || []); }
 function isSerialPort(name) { return typeof name === 'string' && name.startsWith('Serial'); }
 
-function deviceClass(dev) { return dev.type === 'switch' || dev.type === 'hub' ? 'S' : 'H'; }
+// Класс порта для правила кабелей: S — как у коммутатора (MDI-X), H — как у хоста/роутера (MDI).
+// У беспроводного роутера порты Ethernet 1–4 — встроенный коммутатор, порт Internet — как у роутера.
+function deviceClass(dev, port) {
+  const cat = DEVICE_CATALOG[dev.model];
+  if (cat && cat.home) return port && port !== 'Internet' ? 'S' : 'H';
+  if (cat && cat.cls) return cat.cls;
+  return dev.type === 'switch' || dev.type === 'hub' ? 'S' : 'H';
+}
 
 // Правило CCNA: одинаковый класс устройств — кросс, разный — прямой.
-function correctCable(devA, devB) { return deviceClass(devA) === deviceClass(devB) ? 'cross' : 'straight'; }
+function correctCable(devA, devB, portA, portB) { return deviceClass(devA, portA) === deviceClass(devB, portB) ? 'cross' : 'straight'; }
 
 function addLink(topo, aDev, aPort, bDev, bPort, cable) {
   const A = topo.devices[aDev], B = topo.devices[bDev];
@@ -178,6 +187,7 @@ function addLink(topo, aDev, aPort, bDev, bPort, cable) {
   const pa = getPort(A, aPort), pb = getPort(B, bPort);
   if (!pa || !pb) return { error: 'no-port' };
   if (pa.link || pb.link) return { error: 'port-busy' };
+  if ((isWirelessClient(A) && !pa.console) || (isWirelessClient(B) && !pb.console)) return { error: 'port-type' };   // вместо Ethernet стоит беспроводная карта
   if (!!pa.console !== !!pb.console) return { error: 'port-type' };
   // serial ↔ serial только кабелем Serial; Ethernet-кабель в serial-порт не вставить
   if (isSerialPort(aPort) !== isSerialPort(bPort)) return { error: 'port-type' };
@@ -189,7 +199,7 @@ function addLink(topo, aDev, aPort, bDev, bPort, cable) {
     dce = cable === 'dte' ? 'b' : 'a';   // Serial DCE: DCE — тот конец, с которого начали; Serial DTE — наоборот
     cable = 'serial';
   } else if (['serial', 'dce', 'dte'].includes(cable)) return { error: 'port-type' };
-  if (!cable || cable === 'auto') cable = correctCable(A, B);
+  if (!cable || cable === 'auto') cable = correctCable(A, B, aPort, bPort);
   let id = 'l' + topo.seq++;
   while (topo.links[id]) id = 'l' + topo.seq++;
   topo.links[id] = { id, a: { dev: aDev, port: aPort }, b: { dev: bDev, port: bPort }, cable };
@@ -219,7 +229,7 @@ function linkPeer(topo, devId, portName) {
 }
 
 function firstFreePort(dev, prefer, consoleOnly) {
-  const free = dev.ports.filter((p) => !p.link && !!p.console === !!consoleOnly);
+  const free = dev.ports.filter((p) => !p.link && !!p.console === !!consoleOnly && !(isWirelessClient(dev) && p.name === 'FastEthernet0'));
   if (!free.length) return null;
   if (prefer) { const f = free.find((p) => p.name.startsWith(prefer)); if (f) return f.name; }
   return free[0].name;
@@ -228,7 +238,7 @@ function firstFreePort(dev, prefer, consoleOnly) {
 // Административно включён ли порт.
 function portAdminUp(dev, portName) {
   if (dev.off) return false;
-  if (dev.type === 'hub') return true;
+  if (dev.type === 'hub') return dev.cfg.port0On !== false;
   if (dev.type === 'pc') return dev.cfg.portOn !== false;
   const ic = dev.cfg.interfaces[portName];
   return !!ic && !ic.shutdown && !ic.errdis;   // errdis — порт выключен защитой (BPDU Guard, EtherChannel guard)
@@ -238,7 +248,7 @@ function linkCableOk(topo, link) {
   if (link.cable === 'console') return false;
   if (link.cable === 'serial' || isSerialPort(link.a.port) || isSerialPort(link.b.port)) return link.cable === 'serial' && isSerialPort(link.a.port) && isSerialPort(link.b.port);
   const A = topo.devices[link.a.dev], B = topo.devices[link.b.dev];
-  return correctCable(A, B) === link.cable;
+  return correctCable(A, B, link.a.port, link.b.port) === link.cable;
 }
 
 // Консольное подключение ПК (RS 232) → устройство (Console)

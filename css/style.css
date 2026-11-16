@@ -94,6 +94,8 @@ button:disabled { opacity: .45; cursor: default; }
 .link.cross { stroke-dasharray: 7 4; }
 .link.serial { stroke: #d32f2f; stroke-width: 1.8; stroke-linejoin: round; }
 .link.console { stroke: #4aa7e0; stroke-width: 2; }
+.link.wifi { stroke: #34495e; stroke-width: 1.6; stroke-dasharray: 1 5; stroke-linecap: round; fill: none; animation: wifiwave 1.4s linear infinite; pointer-events: none; }
+@keyframes wifiwave { to { stroke-dashoffset: -12; } }
 /* широковещательный шторм: петля без STP — кабель мигает */
 .link.storm { stroke: var(--led-amber); stroke-width: 3; animation: stormblink 0.5s steps(2, start) infinite; }
 @keyframes stormblink { 50% { stroke-opacity: 0.25; } }
@@ -793,3 +795,59 @@ td.he { direction: rtl; text-align: right; font-family: "Arial Hebrew", "Noto Sa
   #demobanner { bottom: 6px; }
   .qtutor { margin-left: 0; }
 }
+
+/* ---------- Wi-Fi: Linksys WRT300N GUI, PC Wireless, Web Browser ---------- */
+.mod.on { font-weight: 600; background: var(--sel); }
+.citem.na { opacity: .5; }
+.guitab { flex: 1; overflow: auto; padding: 8px; min-height: 0; display: flex; }
+.lk { flex: 1; font: 12px Arial, Helvetica, sans-serif; background: #fff; color: #111; border: 1px solid #7f8a96; display: flex; flex-direction: column; min-width: 0; align-self: flex-start; }
+.lk-head { display: flex; align-items: baseline; gap: 10px; background: #12385e; color: #fff; padding: 8px 12px; }
+.lk-brand { font-weight: 800; font-size: 18px; letter-spacing: 2px; }
+.lk-sub2 { font-size: 10px; color: #b8cbe0; }
+.lk-fw { margin-left: auto; font-size: 10px; color: #dbe6f1; }
+.lk-model { display: flex; justify-content: space-between; background: #5f86ad; color: #fff; padding: 4px 12px; font-size: 12px; }
+.lk-model b { font-size: 15px; }
+.lk-tabs { display: flex; flex-wrap: wrap; background: #12385e; }
+.lk-tab { color: #fff; padding: 6px 9px; cursor: pointer; font-size: 11px; font-weight: bold; border-right: 1px solid #2c5680; }
+.lk-tab.on { background: #5f86ad; }
+.lk-subtabs { display: flex; flex-wrap: wrap; gap: 14px; background: #5f86ad; padding: 4px 12px; }
+.lk-subtab { color: #fff; cursor: pointer; font-size: 11px; }
+.lk-subtab.on { font-weight: bold; text-decoration: underline; }
+.lk-body { padding: 4px 0; }
+.lk-sec { display: flex; border-bottom: 1px solid #d5dbe1; }
+.lk-sect { width: 150px; flex: none; background: #1d1d1d; color: #fff; font-weight: bold; padding: 8px; text-align: right; font-size: 11.5px; }
+.lk-secb { flex: 1; padding: 6px 10px; min-width: 0; }
+.lk-row { display: flex; align-items: center; gap: 6px; margin: 4px 0; flex-wrap: wrap; }
+.lk-row > label:first-child { width: 170px; flex: none; }
+.lk-inp { font: 12px Arial, sans-serif; border: 1px solid #8a96a3; padding: 2px 4px; background: #fff; color: #111; }
+.lk-inp:disabled { background: #eceff2; color: #777; }
+.lk-rad { margin-right: 10px; }
+.lk-val { font-weight: bold; }
+.lk-na { color: #555; margin: 6px 0; }
+.lk-msg { margin: 8px 12px; color: #b00020; font-weight: bold; }
+.lk-msg.ok { color: #1e7d32; }
+.lk-foot { background: #12385e; padding: 8px; display: flex; justify-content: flex-end; gap: 8px; }
+.lk-btn { font: bold 11px Arial, sans-serif; background: #e9eef3; color: #12385e; border: 1px solid #7f8a96; padding: 4px 12px; cursor: pointer; }
+.lk-tbl { border-collapse: collapse; }
+.lk-tbl th, .lk-tbl td { border: 1px solid #c7ced5; padding: 2px 8px; text-align: left; }
+.pcw-head { display: flex; align-items: baseline; gap: 12px; background: #12385e; color: #fff; padding: 6px 10px; margin: -8px -14px 0; }
+.pcw-tabs { display: flex; gap: 2px; margin: 8px 0; border-bottom: 1px solid var(--border); }
+.pcw-tab { padding: 5px 12px; cursor: pointer; border: 1px solid var(--border); border-bottom: none; border-radius: 4px 4px 0 0; background: var(--chrome2); font-size: 12.5px; }
+.pcw-tab.on { background: var(--accent); color: #fff; }
+.pcw-body { display: flex; flex-direction: column; gap: 6px; }
+.pcw-cols { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-start; }
+.pcw-list { flex: 1; min-width: 240px; }
+.pcw-list tr { cursor: pointer; }
+.pcw-list tr.on td { background: var(--sel); }
+.pcw-site { width: 220px; }
+.sigbar { display: inline-block; width: 90px; height: 8px; border: 1px solid var(--border); border-radius: 2px; vertical-align: middle; background: var(--row-alt); }
+.sigbar > span { display: block; height: 100%; background: var(--good); }
+.webapp { padding: 0; }
+.webbar { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-bottom: 1px solid var(--border); background: var(--chrome2); }
+.webbar .inp { flex: 1; }
+.webview { flex: 1; overflow: auto; min-height: 0; display: flex; flex-direction: column; }
+.webview > .lk { margin: 8px; }
+.webpage { margin: 12px; padding: 16px 20px; background: #fff; color: #111; border: 1px solid #c7ced5; }
+.webpage h2 { margin: 0 0 8px; color: #12385e; }
+.webpage .muted { color: #555; }
+.weblogin { max-width: 380px; }

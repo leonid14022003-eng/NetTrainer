@@ -47,6 +47,7 @@ test('coach: applying "how to fix" turns the check green', () => {
   const fails = [];
   let tried = 0;
   forAllTasks((task, tpl) => {
+    if (tpl.topic === 'scratch') return; // «сеть с нуля»: без кабелей ни одна правка сама не поможет
     const topo = taskBuild(task);
     for (const it of taskCheck(topo, task).items) {
       if (it.ok || !it.check.kind || !SELF_FIXING.includes(it.check.kind)) continue;

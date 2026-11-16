@@ -72,9 +72,9 @@ function tCli(topo, id, cmds) { iosRunConfig(topo, id, cmds); }
 function tPc(topo, id, ip, mask, gw) { Object.assign(topo.devices[id].cfg, { ipMode: 'static', ip, mask, gateway: gw || null }); }
 function tHostname(topo, ids) { for (const id of ids) tCli(topo, id, ['hostname ' + id]); }
 
-function cableName(topo, a, b) {
+function cableName(topo, a, b, ap, bp) {
   const A = topo.devices[a], B = topo.devices[b];
-  return correctCable(A, B) === 'cross' ? 'Copper Cross-Over' : 'Copper Straight-Through';
+  return correctCable(A, B, ap, bp) === 'cross' ? 'Copper Cross-Over' : 'Copper Straight-Through';
 }
 
 function rowIf(dev, ifn, ip, mask, gw) { return { dev, iface: ifn ? sh(ifn) : 'NIC', ip, mask, gw: gw || '' }; }
@@ -103,7 +103,7 @@ const CHK = {
           if (any) return { ok: false, hint: T('Devices are connected, but not via the required ports.', 'Устройства соединены, но не теми портами, что указаны в задании.', 'ההתקנים מחוברים, אבל לא דרך הפורטים שנדרשו במשימה.') };
           return { ok: false, hint: T('No cable between these ports yet.', 'Кабеля между этими портами пока нет.', 'עדיין אין כבל בין הפורטים האלה.') };
         }
-        if (!linkCableOk(topo, l)) return { ok: false, hint: T('Wrong cable type: use ' + cableName(topo, a, b) + '.', 'Неверный тип кабеля: нужен ' + cableName(topo, a, b) + '.', 'סוג כבל שגוי: צריך ' + cableName(topo, a, b) + '.') };
+        if (!linkCableOk(topo, l)) return { ok: false, hint: T('Wrong cable type: use ' + cableName(topo, a, b, ap, bp) + '.', 'Неверный тип кабеля: нужен ' + cableName(topo, a, b, ap, bp) + '.', 'סוג כבל שגוי: צריך ' + cableName(topo, a, b, ap, bp) + '.') };
         const up = portPhysUp(topo, l.a.dev, l.a.port);
         if (!up) return { ok: false, hint: T('Cable is OK but the link is down — is an interface shut down?', 'Кабель правильный, но линк не поднят — интерфейс выключен (shutdown)?', 'הכבל תקין אבל הקישור לא פעיל — אולי ממשק כבוי (shutdown)?') };
         return { ok: true };
@@ -1730,13 +1730,18 @@ function taskSolutionText(task, topo) {
   const links = (s.links || []).concat(s.relink || []);
   if (links.length) {
     out.push('# Cables / Кабели / כבלים');
-    for (const [a, ap, b, bp] of links) out.push(a + ' ' + ap + '  ↔  ' + b + ' ' + bp + '   (' + (topo ? cableName(topo, a, b) : 'auto') + ')');
+    for (const [a, ap, b, bp] of links) out.push(a + ' ' + ap + '  ↔  ' + b + ' ' + bp + '   (' + (topo ? cableName(topo, a, b, ap, bp) : 'auto') + ')');
     out.push('');
   }
   for (const [d, cmds] of Object.entries(s.cli || {})) {
     out.push('# ' + d + ' — CLI');
     out.push('enable', 'configure terminal', ...cmds, 'end');
     if (s.exec && s.exec[d]) out.push(...s.exec[d]);
+    out.push('');
+  }
+  for (const [d, w] of Object.entries(s.wifi || {})) {
+    out.push('# ' + d + ' — ' + (w.kind === 'home' ? 'GUI' : w.kind === 'ap' ? 'Config' : 'Wi-Fi'));
+    out.push(...wifiSolutionLines(w));
     out.push('');
   }
   for (const [d, v] of Object.entries(s.pc || {})) {
